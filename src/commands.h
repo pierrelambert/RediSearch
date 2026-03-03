@@ -71,3 +71,6 @@
 #define RS_DEBUG RS_CMD_READ_PREFIX ".DEBUG"
 #define RS_SPELL_CHECK RS_CMD_READ_PREFIX ".SPELLCHECK"
 #define RS_CONFIG RS_CMD_READ_PREFIX ".CONFIG"
+
+// SQL command (always FT.SQL, no prefix variant)
+#define RS_SQL_CMD "FT.SQL"

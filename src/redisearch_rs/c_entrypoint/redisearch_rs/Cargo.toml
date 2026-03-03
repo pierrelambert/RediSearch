@@ -52,6 +52,7 @@ query_cache_ffi = { path = "../query_cache_ffi" }
 workspace_hack.workspace = true
 module_init_ffi = { path = "../module_init_ffi" }
 search_result_ffi = { path = "../search_result_ffi" }
+sql_parser_ffi = { path = "../sql_parser_ffi" }
 
 [target.'cfg(all(target_env="musl", target_os="linux"))'.dependencies.redis-module]
 # Statically link to the libclang on aarch64-unknown-linux-musl,

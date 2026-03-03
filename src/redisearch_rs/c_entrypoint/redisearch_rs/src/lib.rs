@@ -31,6 +31,7 @@ pub use query_term_ffi as query_term;
 pub use result_processor_ffi as result_processor;
 pub use search_result_ffi as search_result;
 pub use slots_tracker_ffi as slots_tracker;
+pub use sql_parser_ffi as sql_parser;
 pub use sorting_vector_ffi as sorting_vector;
 pub use triemap_ffi as triemap;
 pub use types_ffi as types;
