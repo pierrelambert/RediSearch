@@ -97,6 +97,10 @@ configPair_t __configPairs[] = {
   {"_MAX_TRIM_DELAY_MS",               "search-_max-trim-delay-ms"},
   {"_TRIMMING_STATE_CHECK_DELAY_MS",   "search-_trimming-state-check-delay-ms"},
   {"_SIMULATE_IN_FLEX",                "search-_simulate-in-flex"},
+  {"BLOOM_FILTER_ENABLED",             "search-bloom-filter-enabled"},
+  {"QUERYCACHE_ENABLED",               "search-querycache-enabled"},
+  {"CURSOR_ADAPTIVE_DEFAULT",          "search-cursor-adaptive-default"},
+  {"NUMERIC_TREE_COMPACTION",          "search-numeric-tree-compaction"},
 };
 
 static const char* FTConfigNameToConfigName(const char *name) {
@@ -1258,6 +1262,22 @@ CONFIG_GETTER(getQueryCacheMaxSize) {
   return sdscatprintf(ss, "%zu", config->queryCacheMaxSize);
 }
 
+// BLOOM_FILTER_ENABLED
+CONFIG_BOOLEAN_SETTER(setBloomFilterEnabled, bloomFilterEnabled)
+CONFIG_BOOLEAN_GETTER(getBloomFilterEnabled, bloomFilterEnabled, 0)
+
+// QUERYCACHE_ENABLED
+CONFIG_BOOLEAN_SETTER(setQueryCacheEnabled, queryCacheEnabled)
+CONFIG_BOOLEAN_GETTER(getQueryCacheEnabled, queryCacheEnabled, 0)
+
+// CURSOR_ADAPTIVE_DEFAULT
+CONFIG_BOOLEAN_SETTER(setCursorAdaptiveDefault, cursorAdaptiveDefault)
+CONFIG_BOOLEAN_GETTER(getCursorAdaptiveDefault, cursorAdaptiveDefault, 0)
+
+// NUMERIC_TREE_COMPACTION
+CONFIG_BOOLEAN_SETTER(setNumericTreeCompaction, numericTreeCompaction)
+CONFIG_BOOLEAN_GETTER(getNumericTreeCompaction, numericTreeCompaction, 0)
+
 RSConfig RSGlobalConfig = RS_DEFAULT_CONFIG;
 
 static RSConfigVar *findConfigVar(const RSConfigOptions *config, const char *name) {
@@ -1617,6 +1637,22 @@ RSConfigOptions RSGlobalConfigOptions = {
          .helpText = "Maximum number of entries in the query result cache (0 = disabled, default: 1000)",
          .setValue = setQueryCacheMaxSize,
          .getValue = getQueryCacheMaxSize},
+        {.name = "BLOOM_FILTER_ENABLED",
+         .helpText = "Enable/disable bloom filter optimization (default: true)",
+         .setValue = setBloomFilterEnabled,
+         .getValue = getBloomFilterEnabled},
+        {.name = "QUERYCACHE_ENABLED",
+         .helpText = "Enable/disable query result cache (default: true)",
+         .setValue = setQueryCacheEnabled,
+         .getValue = getQueryCacheEnabled},
+        {.name = "CURSOR_ADAPTIVE_DEFAULT",
+         .helpText = "Enable adaptive cursors by default (default: false)",
+         .setValue = setCursorAdaptiveDefault,
+         .getValue = getCursorAdaptiveDefault},
+        {.name = "NUMERIC_TREE_COMPACTION",
+         .helpText = "Enable/disable numeric tree compaction optimization (default: true)",
+         .setValue = setNumericTreeCompaction,
+         .getValue = getNumericTreeCompaction},
         {.name = NULL}}};
 
 void RSConfigOptions_AddConfigs(RSConfigOptions *src, RSConfigOptions *dst) {

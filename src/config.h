@@ -214,6 +214,14 @@ typedef struct {
   bool simulateInFlex;
   // Maximum number of entries in the query result cache (0 = disabled)
   size_t queryCacheMaxSize;
+  // Enable/disable bloom filter optimization
+  bool bloomFilterEnabled;
+  // Enable/disable query cache
+  bool queryCacheEnabled;
+  // Enable/disable adaptive cursors by default
+  bool cursorAdaptiveDefault;
+  // Enable/disable numeric tree compaction
+  bool numericTreeCompaction;
 } RSConfig;
 
 typedef enum {
@@ -405,6 +413,10 @@ char *getRedisConfigValue(RedisModuleCtx *ctx, const char* confName);
     .infoEmitOnZeroIndexes = false,                                            \
     .simulateInFlex = false,                                                   \
     .queryCacheMaxSize = DEFAULT_QUERY_CACHE_MAX_SIZE,                         \
+    .bloomFilterEnabled = true,                                                \
+    .queryCacheEnabled = true,                                                 \
+    .cursorAdaptiveDefault = false,                                            \
+    .numericTreeCompaction = true,                                             \
   }
 
 #define REDIS_ARRAY_LIMIT 7
