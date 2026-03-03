@@ -22,6 +22,8 @@
 #include "info/info_redis/threads/current_thread.h"
 #include "obfuscation/obfuscation_api.h"
 #include "query_error.h"
+#include "query_cache_integration.h"
+#include "query_cache.h"
 
 static void renderIndexOptions(RedisModule_Reply *reply, const IndexSpec *sp) {
 
@@ -311,6 +313,23 @@ void fillReplyWithIndexInfo(RedisSearchCtx* sctx, RedisModule_Reply *reply, bool
   }
 
   Cursors_RenderStats(&g_CursorsList, &g_CursorsListCoord, sp, reply);
+
+  // Query cache stats
+  QueryCacheStats cache_stats = QueryCacheIntegration_GetStats();
+  if (cache_stats.hits > 0 || cache_stats.misses > 0) {
+    RedisModule_ReplyKV_Map(reply, "query_cache_stats");
+    REPLY_KVINT("hits", cache_stats.hits);
+    REPLY_KVINT("misses", cache_stats.misses);
+    double hit_rate = 0.0;
+    if (cache_stats.hits + cache_stats.misses > 0) {
+      hit_rate = (double)cache_stats.hits / (double)(cache_stats.hits + cache_stats.misses);
+    }
+    REPLY_KVNUM("hit_rate", hit_rate);
+    REPLY_KVINT("entries", cache_stats.entries);
+    REPLY_KVINT("memory_bytes", cache_stats.memory_bytes);
+    REPLY_KVINT("evictions", cache_stats.evictions);
+    RedisModule_Reply_MapEnd(reply);
+  }
 
   // Unlock spec
   RedisSearchCtx_UnlockSpec(sctx);
