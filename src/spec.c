@@ -1873,10 +1873,13 @@ void IndexSpec_AddTerm(IndexSpec *sp, const char *term, size_t len) {
   if (isNew) {
     sp->stats.scoring.numTerms++;
     sp->stats.termsSize += len;
-    // Add term to Bloom filter for fast negative lookups
-    if (sp->termFilter) {
-      BloomFilter_Insert(sp->termFilter, term, len);
+    // Lazily initialize Bloom filter on first term insertion
+    // Start with 1000 expected items, 1% false positive rate (~10 bits/term)
+    if (!sp->termFilter) {
+      sp->termFilter = BloomFilter_New(1000, 0.01);
     }
+    // Add term to Bloom filter for fast negative lookups
+    BloomFilter_Insert(sp->termFilter, term, len);
   }
 }
 
@@ -2314,9 +2317,9 @@ static void initializeIndexSpec(IndexSpec *sp, const HiddenString *name, IndexFl
 
   sp->fieldIdToIndex = array_new(t_fieldIndex, 0);
   sp->terms = NewTrie(NULL, Trie_Sort_Lex);
-  // Initialize Bloom filter with default capacity and 1% false positive rate
-  // Expected 100K terms initially, will grow as needed
-  sp->termFilter = BloomFilter_New(100000, 0.01);
+  // Bloom filter will be lazily initialized on first term insertion
+  // to avoid pre-allocating memory for empty indexes
+  sp->termFilter = NULL;
 
   IndexSpec_InitLock(sp);
   // First, initialise fields IndexError for every field

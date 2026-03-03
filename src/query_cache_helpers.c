@@ -11,6 +11,7 @@
 #include "aggregate/aggregate.h"
 #include "rmutil/alloc.h"
 #include "util/arr.h"
+#include "doc_table.h"
 #include <string.h>
 
 CachedDocIds *QueryCache_SerializeDocIds(SearchResult **results, size_t count, size_t *size_out) {
@@ -36,8 +37,8 @@ CachedDocIds *QueryCache_SerializeDocIds(SearchResult **results, size_t count, s
   return cached;
 }
 
-SearchResult **QueryCache_DeserializeDocIds(const uint8_t *cached_data, size_t data_size) {
-  if (!cached_data || data_size < sizeof(CachedDocIds)) {
+SearchResult **QueryCache_DeserializeDocIds(const uint8_t *cached_data, size_t data_size, const DocTable *docs) {
+  if (!cached_data || data_size < sizeof(CachedDocIds) || !docs) {
     return NULL;
   }
 
@@ -57,10 +58,33 @@ SearchResult **QueryCache_DeserializeDocIds(const uint8_t *cached_data, size_t d
 
   // Create SearchResult for each cached doc ID
   for (size_t i = 0; i < cached->count; i++) {
+    t_docId doc_id = cached->doc_ids[i];
+
+    // Load document metadata from DocTable
+    const RSDocumentMetadata *dmd = DocTable_Borrow(docs, doc_id);
+    if (!dmd) {
+      // Document was deleted or doesn't exist - cleanup and return NULL
+      for (size_t j = 0; j < i; j++) {
+        const RSDocumentMetadata *prev_dmd = SearchResult_GetDocumentMetadata(results[j]);
+        if (prev_dmd) {
+          DMD_Return(prev_dmd);
+        }
+        SearchResult_Destroy(results[j]);
+        rm_free(results[j]);
+      }
+      array_free(results);
+      return NULL;
+    }
+
     SearchResult *res = rm_malloc(sizeof(SearchResult));
     if (!res) {
       // Cleanup on allocation failure
+      DMD_Return(dmd);
       for (size_t j = 0; j < i; j++) {
+        const RSDocumentMetadata *prev_dmd = SearchResult_GetDocumentMetadata(results[j]);
+        if (prev_dmd) {
+          DMD_Return(prev_dmd);
+        }
         SearchResult_Destroy(results[j]);
         rm_free(results[j]);
       }
@@ -69,7 +93,8 @@ SearchResult **QueryCache_DeserializeDocIds(const uint8_t *cached_data, size_t d
     }
 
     *res = SearchResult_New();
-    SearchResult_SetDocId(res, cached->doc_ids[i]);
+    SearchResult_SetDocId(res, doc_id);
+    SearchResult_SetDocumentMetadata(res, dmd);
     array_append(results, res);
   }
 

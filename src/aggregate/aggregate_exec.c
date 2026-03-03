@@ -33,6 +33,10 @@
 #include "result_processor.h"
 #include "profile/options.h"
 #include "reply_empty.h"
+#include "query_cache_integration.h"
+#include "query_cache_helpers.h"
+#include "config.h"
+#include "spec.h"
 
 // Multi threading data structure
 typedef struct {
@@ -415,6 +419,7 @@ static void sendChunk_Resp2(AREQ *req, RedisModule_Reply *reply, size_t limit,
     SearchResult **results = NULL;
     long nelem = 0, resultsLen = REDISMODULE_POSTPONED_ARRAY_LEN;
     bool cursor_done = false;
+    bool cache_hit = false;
 
     // Check timeout before starting pipeline
     if (AREQ_TimedOut(req)) {
@@ -423,7 +428,52 @@ static void sendChunk_Resp2(AREQ *req, RedisModule_Reply *reply, size_t limit,
       goto done_2_err;
     }
 
-    startPipeline(req, rp, &results, &r, &rc);
+    // Try cache lookup before executing query
+    if (RSGlobalConfig.queryCacheMaxSize > 0) {
+      QEFlags reqFlags = AREQ_RequestFlags(req);
+      if (QueryCache_ShouldCache(reqFlags, limit)) {
+        RedisSearchCtx *sctx = AREQ_SearchCtx(req);
+        if (sctx && sctx->spec) {
+          // Get query parameters
+          const char *index_name = IndexSpec_FormatName(sctx->spec, false);
+          const char *query_string = req->query;
+
+          // Get limit and offset from arrange step
+          AGGPlan *plan = AREQ_AGGPlan(req);
+          PLN_ArrangeStep *arng = AGPLN_GetArrangeStep(plan);
+          size_t result_limit = arng && arng->isLimited ? arng->limit : limit;
+          size_t result_offset = arng && arng->isLimited ? arng->offset : 0;
+
+          // TODO: Serialize sort parameters
+          const char *sort_params = NULL;
+
+          uint64_t revision = sctx->spec->revision;
+
+          // Try to get cached results
+          size_t cached_size = 0;
+          const uint8_t *cached_data = QueryCacheIntegration_Lookup(
+            index_name, query_string, result_limit, result_offset,
+            sort_params, revision, &cached_size
+          );
+
+          if (cached_data) {
+            // Cache HIT - deserialize cached doc IDs
+            results = QueryCache_DeserializeDocIds(cached_data, cached_size, &sctx->spec->docs);
+            if (results) {
+              cache_hit = true;
+              rc = RS_RESULT_OK;
+              // Set total results count from cached data
+              qctx->totalResults = array_len(results);
+            }
+          }
+        }
+      }
+    }
+
+    // If cache miss, execute the query normally
+    if (!cache_hit) {
+      startPipeline(req, rp, &results, &r, &rc);
+    }
 
     if (!AREQ_TryClaimReply(req)) {
       // Timeout callback owns reply - skip to cleanup without replying
@@ -553,6 +603,41 @@ done_2:
     AREQ_MarkReplied(req);
 
 done_2_err:
+    // Store results in cache if caching is enabled and query is cacheable
+    if (RSGlobalConfig.queryCacheMaxSize > 0 && results != NULL && rc == RS_RESULT_OK) {
+      QEFlags reqFlags = AREQ_RequestFlags(req);
+      if (QueryCache_ShouldCache(reqFlags, limit)) {
+        RedisSearchCtx *sctx = AREQ_SearchCtx(req);
+        if (sctx && sctx->spec) {
+          // Get query parameters
+          const char *index_name = IndexSpec_FormatName(sctx->spec, false);
+          const char *query_string = req->query;
+
+          // Get limit and offset from arrange step
+          AGGPlan *plan = AREQ_AGGPlan(req);
+          PLN_ArrangeStep *arng = AGPLN_GetArrangeStep(plan);
+          size_t result_limit = arng && arng->isLimited ? arng->limit : limit;
+          size_t result_offset = arng && arng->isLimited ? arng->offset : 0;
+
+          // TODO: Serialize sort parameters
+          const char *sort_params = NULL;
+
+          uint64_t revision = sctx->spec->revision;
+
+          // Serialize doc IDs
+          size_t data_size = 0;
+          CachedDocIds *cached = QueryCache_SerializeDocIds(results, array_len(results), &data_size);
+          if (cached) {
+            QueryCacheIntegration_Store(
+              index_name, query_string, result_limit, result_offset,
+              sort_params, revision, (const uint8_t *)cached, data_size
+            );
+            rm_free(cached);
+          }
+        }
+      }
+    }
+
     finishSendChunk(req, results, &r, cursor_done);
 
     if (resultsLen != REDISMODULE_POSTPONED_ARRAY_LEN && rc == RS_RESULT_OK && resultsLen != nelem) {
@@ -610,6 +695,7 @@ static void sendChunk_Resp3(AREQ *req, RedisModule_Reply *reply, size_t limit,
     ResultProcessor *rp = qctx->endProc;
     SearchResult **results = NULL;
     bool cursor_done = false;
+    bool cache_hit = false;
 
     // Check timeout before starting pipeline
     if (AREQ_TimedOut(req)) {
@@ -618,7 +704,51 @@ static void sendChunk_Resp3(AREQ *req, RedisModule_Reply *reply, size_t limit,
       goto done_3_err;
     }
 
-    startPipeline(req, rp, &results, &r, &rc);
+    // Try cache lookup before executing query
+    if (RSGlobalConfig.queryCacheMaxSize > 0) {
+      QEFlags reqFlags = AREQ_RequestFlags(req);
+      if (QueryCache_ShouldCache(reqFlags, limit)) {
+        if (sctx && sctx->spec) {
+          // Get query parameters
+          const char *index_name = IndexSpec_FormatName(sctx->spec, false);
+          const char *query_string = req->query;
+
+          // Get limit and offset from arrange step
+          AGGPlan *plan = AREQ_AGGPlan(req);
+          PLN_ArrangeStep *arng = AGPLN_GetArrangeStep(plan);
+          size_t result_limit = arng && arng->isLimited ? arng->limit : limit;
+          size_t result_offset = arng && arng->isLimited ? arng->offset : 0;
+
+          // TODO: Serialize sort parameters
+          const char *sort_params = NULL;
+
+          uint64_t revision = sctx->spec->revision;
+
+          // Try to get cached results
+          size_t cached_size = 0;
+          const uint8_t *cached_data = QueryCacheIntegration_Lookup(
+            index_name, query_string, result_limit, result_offset,
+            sort_params, revision, &cached_size
+          );
+
+          if (cached_data) {
+            // Cache HIT - deserialize cached doc IDs
+            results = QueryCache_DeserializeDocIds(cached_data, cached_size, &sctx->spec->docs);
+            if (results) {
+              cache_hit = true;
+              rc = RS_RESULT_OK;
+              // Set total results count from cached data
+              qctx->totalResults = array_len(results);
+            }
+          }
+        }
+      }
+    }
+
+    // If cache miss, execute the query normally
+    if (!cache_hit) {
+      startPipeline(req, rp, &results, &r, &rc);
+    }
 
     if (!AREQ_TryClaimReply(req)) {
       // Timeout callback owns reply - skip to cleanup without replying
@@ -736,6 +866,40 @@ done_3:
     AREQ_MarkReplied(req);
 
 done_3_err:
+    // Store results in cache if caching is enabled and query is cacheable
+    if (RSGlobalConfig.queryCacheMaxSize > 0 && results != NULL && rc == RS_RESULT_OK) {
+      QEFlags reqFlags = AREQ_RequestFlags(req);
+      if (QueryCache_ShouldCache(reqFlags, limit)) {
+        if (sctx && sctx->spec) {
+          // Get query parameters
+          const char *index_name = IndexSpec_FormatName(sctx->spec, false);
+          const char *query_string = req->query;
+
+          // Get limit and offset from arrange step
+          AGGPlan *plan = AREQ_AGGPlan(req);
+          PLN_ArrangeStep *arng = AGPLN_GetArrangeStep(plan);
+          size_t result_limit = arng && arng->isLimited ? arng->limit : limit;
+          size_t result_offset = arng && arng->isLimited ? arng->offset : 0;
+
+          // TODO: Serialize sort parameters
+          const char *sort_params = NULL;
+
+          uint64_t revision = sctx->spec->revision;
+
+          // Serialize doc IDs
+          size_t data_size = 0;
+          CachedDocIds *cached = QueryCache_SerializeDocIds(results, array_len(results), &data_size);
+          if (cached) {
+            QueryCacheIntegration_Store(
+              index_name, query_string, result_limit, result_offset,
+              sort_params, revision, (const uint8_t *)cached, data_size
+            );
+            rm_free(cached);
+          }
+        }
+      }
+    }
+
     finishSendChunk(req, results, &r, cursor_done);
 }
 
