@@ -343,11 +343,24 @@ static size_t getResultsFactor(AREQ *req) {
 }
 
 static void startPipeline(AREQ *req, ResultProcessor *rp, SearchResult ***results, SearchResult *r, int *rc) {
+  // Check if we need to aggregate results for caching
+  bool needsAggregation = false;
+  if (RSGlobalConfig.queryCacheEnabled && RSGlobalConfig.queryCacheMaxSize > 0) {
+    QEFlags reqFlags = AREQ_RequestFlags(req);
+    AGGPlan *plan = AREQ_AGGPlan(req);
+    PLN_ArrangeStep *arng = AGPLN_GetArrangeStep(plan);
+    size_t result_limit = arng && arng->isLimited ? arng->limit : DEFAULT_LIMIT;
+    needsAggregation = QueryCache_ShouldCache(reqFlags, result_limit);
+    fprintf(stderr, "[QueryCache] startPipeline: needsAggregation=%d shouldCache=%d limit=%zu\n",
+            needsAggregation, QueryCache_ShouldCache(reqFlags, result_limit), result_limit);
+  }
+
   CommonPipelineCtx ctx = {
     .timeoutPolicy = req->reqConfig.timeoutPolicy,
     .timeout = &req->sctx->time.timeout,
     .oomPolicy = req->reqConfig.oomPolicy,
     .skipTimeoutChecks = req->sctx->time.skipTimeoutChecks,
+    .needsAggregation = needsAggregation,
   };
   startPipelineCommon(&ctx, rp, results, r, rc);
 
@@ -429,7 +442,7 @@ static void sendChunk_Resp2(AREQ *req, RedisModule_Reply *reply, size_t limit,
     }
 
     // Try cache lookup before executing query
-    if (RSGlobalConfig.queryCacheMaxSize > 0) {
+    if (RSGlobalConfig.queryCacheEnabled && RSGlobalConfig.queryCacheMaxSize > 0) {
       QEFlags reqFlags = AREQ_RequestFlags(req);
 
       // Get limit and offset from arrange step first
@@ -529,8 +542,15 @@ static void sendChunk_Resp2(AREQ *req, RedisModule_Reply *reply, size_t limit,
     }
 
     // If the policy is `ON_TIMEOUT FAIL`, we already aggregated the results
+    // Save results for caching before setting to NULL
+    SearchResult **results_for_cache = results;
+    fprintf(stderr, "[QueryCache] Before populate: results=%p len=%zu\n",
+            (void*)results, results ? array_len(results) : 0);
     if (results != NULL) {
       nelem += populateReplyWithResults(reply, results, req, &cv);
+      fprintf(stderr, "[QueryCache] After populate: results=%p len=%zu results_for_cache=%p len=%zu\n",
+              (void*)results, results ? array_len(results) : 0,
+              (void*)results_for_cache, results_for_cache ? array_len(results_for_cache) : 0);
       results = NULL;
       goto done_2;
     }
@@ -605,7 +625,13 @@ done_2:
 
 done_2_err:
     // Store results in cache if caching is enabled and query is cacheable
-    if (RSGlobalConfig.queryCacheMaxSize > 0 && results != NULL && rc == RS_RESULT_OK) {
+    fprintf(stderr, "[QueryCache] STORE CHECK: enabled=%d maxSize=%zu results_for_cache=%p rc=%d\n",
+            RSGlobalConfig.queryCacheEnabled, RSGlobalConfig.queryCacheMaxSize, (void*)results_for_cache, rc);
+    fprintf(stderr, "[QueryCache] Condition check: %d && %d && %d && %d = %d\n",
+            RSGlobalConfig.queryCacheEnabled, RSGlobalConfig.queryCacheMaxSize > 0, results_for_cache != NULL, (rc == RS_RESULT_OK || rc == RS_RESULT_EOF),
+            RSGlobalConfig.queryCacheEnabled && RSGlobalConfig.queryCacheMaxSize > 0 && results_for_cache != NULL && (rc == RS_RESULT_OK || rc == RS_RESULT_EOF));
+    if (RSGlobalConfig.queryCacheEnabled && RSGlobalConfig.queryCacheMaxSize > 0 && results_for_cache != NULL && (rc == RS_RESULT_OK || rc == RS_RESULT_EOF)) {
+      fprintf(stderr, "[QueryCache] INSIDE IF BLOCK\n");
       QEFlags reqFlags = AREQ_RequestFlags(req);
 
       // Get limit and offset from arrange step first
@@ -614,8 +640,10 @@ done_2_err:
       size_t result_limit = arng && arng->isLimited ? arng->limit : DEFAULT_LIMIT;
       size_t result_offset = arng && arng->isLimited ? arng->offset : 0;
 
+      fprintf(stderr, "[QueryCache] ShouldCache=%d\n", QueryCache_ShouldCache(reqFlags, result_limit));
       if (QueryCache_ShouldCache(reqFlags, result_limit)) {
         RedisSearchCtx *sctx = AREQ_SearchCtx(req);
+        fprintf(stderr, "[QueryCache] sctx=%p spec=%p\n", (void*)sctx, sctx ? (void*)sctx->spec : NULL);
         if (sctx && sctx->spec) {
           // Get query parameters
           const char *index_name = IndexSpec_FormatName(sctx->spec, false);
@@ -628,7 +656,10 @@ done_2_err:
 
           // Serialize doc IDs
           size_t data_size = 0;
-          CachedDocIds *cached = QueryCache_SerializeDocIds(results, array_len(results), &data_size);
+          size_t num_results = array_len(results_for_cache);
+          fprintf(stderr, "[QueryCache] Serializing %zu results...\n", num_results);
+          CachedDocIds *cached = QueryCache_SerializeDocIds(results_for_cache, num_results, &data_size);
+          fprintf(stderr, "[QueryCache] Serialized cached=%p data_size=%zu\n", (void*)cached, data_size);
           if (cached) {
             QueryCacheIntegration_Store(
               index_name, query_string, result_limit, result_offset,
@@ -707,7 +738,7 @@ static void sendChunk_Resp3(AREQ *req, RedisModule_Reply *reply, size_t limit,
     }
 
     // Try cache lookup before executing query
-    if (RSGlobalConfig.queryCacheMaxSize > 0) {
+    if (RSGlobalConfig.queryCacheEnabled && RSGlobalConfig.queryCacheMaxSize > 0) {
       QEFlags reqFlags = AREQ_RequestFlags(req);
 
       // Get limit and offset from arrange step first
@@ -870,7 +901,7 @@ done_3:
 
 done_3_err:
     // Store results in cache if caching is enabled and query is cacheable
-    if (RSGlobalConfig.queryCacheMaxSize > 0 && results != NULL && rc == RS_RESULT_OK) {
+    if (RSGlobalConfig.queryCacheEnabled && RSGlobalConfig.queryCacheMaxSize > 0 && results != NULL && rc == RS_RESULT_OK) {
       QEFlags reqFlags = AREQ_RequestFlags(req);
 
       // Get limit and offset from arrange step first

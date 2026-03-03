@@ -103,9 +103,17 @@ const uint8_t *QueryCacheIntegration_Lookup(const char *index_name, const char *
   if (g_queryCache == NULL || size_out == NULL) {
     return NULL;
   }
-  
+
   uint64_t query_hash = hash_query_params(index_name, query_string, limit, offset, sort_params);
-  return QueryCache_Get(g_queryCache, query_hash, index_revision, size_out);
+  const uint8_t *result = QueryCache_Get(g_queryCache, query_hash, index_revision, size_out);
+
+  // Debug logging
+  fprintf(stderr, "[QueryCache] LOOKUP: idx=%s query='%s' limit=%zu offset=%zu hash=%llu rev=%llu found=%d\n",
+          index_name ? index_name : "NULL",
+          query_string ? query_string : "NULL",
+          limit, offset, (unsigned long long)query_hash, (unsigned long long)index_revision, result != NULL);
+
+  return result;
 }
 
 void QueryCacheIntegration_Store(const char *index_name, const char *query_string,
@@ -114,8 +122,15 @@ void QueryCacheIntegration_Store(const char *index_name, const char *query_strin
   if (g_queryCache == NULL || data == NULL) {
     return;
   }
-  
+
   uint64_t query_hash = hash_query_params(index_name, query_string, limit, offset, sort_params);
+
+  // Debug logging
+  fprintf(stderr, "[QueryCache] STORE: idx=%s query='%s' limit=%zu offset=%zu hash=%llu rev=%llu size=%zu\n",
+          index_name ? index_name : "NULL",
+          query_string ? query_string : "NULL",
+          limit, offset, (unsigned long long)query_hash, (unsigned long long)index_revision, data_size);
+
   QueryCache_Insert(g_queryCache, query_hash, index_revision, data, data_size);
 }
 
