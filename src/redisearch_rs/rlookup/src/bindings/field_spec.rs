@@ -45,6 +45,7 @@ pub enum FieldSpecType {
     Tag = 8,
     Vector = 16,
     Geometry = 32,
+    DateTime = 64,
 }
 pub type FieldSpecTypes = BitFlags<FieldSpecType>;
 
