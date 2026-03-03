@@ -811,6 +811,36 @@ run_rust_valgrind_tests() {
 }
 
 #-----------------------------------------------------------------------------
+# Function: check_and_kill_redis_on_default_port
+# Check if Redis is running on port 6379 and kill it to avoid conflicts
+#-----------------------------------------------------------------------------
+check_and_kill_redis_on_default_port() {
+  # Check if port 6379 is in use
+  if lsof -i :6379 >/dev/null 2>&1; then
+    echo "Warning: Redis server is running on port 6379"
+    echo "This will conflict with test framework. Attempting to kill it..."
+
+    # Get PIDs using port 6379
+    PIDS=$(lsof -ti :6379 2>/dev/null)
+
+    if [[ -n "$PIDS" ]]; then
+      echo "Killing Redis processes: $PIDS"
+      kill $PIDS 2>/dev/null || true
+      sleep 1
+
+      # Verify port is free
+      if lsof -i :6379 >/dev/null 2>&1; then
+        echo "Error: Failed to free port 6379. Please manually kill Redis servers."
+        echo "Run: lsof -ti :6379 | xargs kill"
+        exit 1
+      else
+        echo "Port 6379 is now free"
+      fi
+    fi
+  fi
+}
+
+#-----------------------------------------------------------------------------
 # Function: run_python_tests
 # Run Python behavioral tests
 #-----------------------------------------------------------------------------
@@ -820,6 +850,9 @@ run_python_tests() {
   fi
 
   echo "Running Python behavioral tests..."
+
+  # Check and kill any Redis servers on port 6379 to avoid conflicts
+  check_and_kill_redis_on_default_port
 
   # Locate the built module
   MODULE_PATH="$BINDIR/redisearch.so"
