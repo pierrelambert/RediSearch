@@ -511,6 +511,12 @@ char *IndexSpec_FormatObfuscatedName(const HiddenString *specName) {
   return rm_strdup(buffer);
 }
 
+void IndexSpec_BumpRevision(IndexSpec *spec) {
+  if (spec) {
+    __atomic_fetch_add(&spec->revision, 1, __ATOMIC_SEQ_CST);
+  }
+}
+
 static bool checkIfSpecExists(const char *rawSpecName) {
   bool found = false;
   HiddenString* specName = NewHiddenString(rawSpecName, strlen(rawSpecName), false);
@@ -3771,6 +3777,10 @@ int IndexSpec_UpdateDoc(IndexSpec *spec, RedisModuleCtx *ctx, RedisModuleString 
   spec->stats.totalIndexTime += rs_wall_clock_elapsed_ns(&startDocTime);
   IndexSpec_DecrActiveWrites(spec);
   RedisSearchCtx_UnlockSpec(&sctx);
+
+  // Invalidate query cache on document update
+  IndexSpec_BumpRevision(spec);
+
   return REDISMODULE_OK;
 }
 
@@ -3837,6 +3847,9 @@ int IndexSpec_DeleteDoc(IndexSpec *spec, RedisModuleCtx *ctx, RedisModuleString 
   IndexSpec_DeleteDoc_Unsafe(spec, ctx, key);
   IndexSpec_DecrActiveWrites(spec);
   RedisSearchCtx_UnlockSpec(&sctx);
+
+  // Invalidate query cache on document delete
+  IndexSpec_BumpRevision(spec);
 
   return REDISMODULE_OK;
 }
