@@ -1,8 +1,9 @@
 """
 Test DATETIME field type functionality.
 
-DATETIME fields currently use the numeric infrastructure and accept Unix timestamps.
-Future enhancements may include ISO-8601 parsing and relative date support.
+DATETIME fields use the numeric infrastructure and accept:
+- Unix timestamps (numeric values)
+- ISO-8601 formatted date/datetime strings
 """
 from common import *
 from RLTest import Env
@@ -352,4 +353,53 @@ def test_datetime_limitations(env):
     env.expect('HSET', 'doc2', 'timestamp', '1704067200').equal(1)
     res = env.cmd('FT.SEARCH', 'idx', '@timestamp:[1704067200 1704067200]')
     env.assertEqual(res[0], 1)  # Found
+
+
+def test_datetime_iso8601_parsing(env):
+    """Test ISO-8601 date/datetime parsing for DATETIME fields."""
+    conn = getConnectionByEnv(env)
+
+    # Create index with DATETIME field
+    env.expect('FT.CREATE', 'idx', 'SCHEMA', 'created', 'DATETIME').ok()
+
+    # Test date-only format (YYYY-MM-DD) - should be midnight UTC
+    env.expect('HSET', 'doc1', 'created', '2024-01-01').equal(1)
+    res = env.cmd('FT.SEARCH', 'idx', '@created:[1704067200 1704067200]')
+    env.assertEqual(res[0], 1)  # 2024-01-01 00:00:00 UTC = 1704067200
+
+    # Test datetime with UTC timezone
+    env.expect('HSET', 'doc2', 'created', '2024-03-15T10:30:00Z').equal(1)
+    res = env.cmd('FT.SEARCH', 'idx', '@created:[1710498600 1710498600]')
+    env.assertEqual(res[0], 1)  # 2024-03-15 10:30:00 UTC = 1710498600
+
+    # Test datetime with timezone offset
+    env.expect('HSET', 'doc3', 'created', '2024-03-15T15:30:00+05:00').equal(1)
+    res = env.cmd('FT.SEARCH', 'idx', '@created:[1710498600 1710498600]')
+    env.assertEqual(res[0], 2)  # Same as doc2 (15:30+05:00 = 10:30 UTC)
+
+    # Test that numeric timestamps still work
+    env.expect('HSET', 'doc4', 'created', '1735689600').equal(1)
+    res = env.cmd('FT.SEARCH', 'idx', '@created:[1735689600 1735689600]')
+    env.assertEqual(res[0], 1)  # 2025-01-01 00:00:00 UTC
+
+
+def test_datetime_iso8601_sortable(env):
+    """Test ISO-8601 parsing with sortable DATETIME fields."""
+    conn = getConnectionByEnv(env)
+
+    # Create index with sortable DATETIME field
+    env.expect('FT.CREATE', 'idx', 'SCHEMA', 'timestamp', 'DATETIME', 'SORTABLE').ok()
+
+    # Add documents with ISO-8601 dates
+    env.expect('HSET', 'doc1', 'timestamp', '2024-01-01').equal(1)
+    env.expect('HSET', 'doc2', 'timestamp', '2024-06-15T12:00:00Z').equal(1)
+    env.expect('HSET', 'doc3', 'timestamp', '2024-12-31T23:59:59Z').equal(1)
+
+    # Search and sort by timestamp
+    res = env.cmd('FT.SEARCH', 'idx', '*', 'SORTBY', 'timestamp', 'ASC')
+    env.assertEqual(res[0], 3)
+    # Verify order: doc1 < doc2 < doc3
+    env.assertIn('doc1', str(res[1]))
+    env.assertIn('doc2', str(res[3]))
+    env.assertIn('doc3', str(res[5]))
 
