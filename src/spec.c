@@ -1874,9 +1874,10 @@ void IndexSpec_AddTerm(IndexSpec *sp, const char *term, size_t len) {
     sp->stats.scoring.numTerms++;
     sp->stats.termsSize += len;
     // Lazily initialize Bloom filter on first term insertion
-    // Start with 1000 expected items, 1% false positive rate (~10 bits/term)
+    // Start with 10K expected items, 1% false positive rate (~10 bits/term)
+    // This provides good balance between memory overhead and false positive rate
     if (!sp->termFilter) {
-      sp->termFilter = BloomFilter_New(1000, 0.01);
+      sp->termFilter = BloomFilter_New(10000, 0.01);
     }
     // Add term to Bloom filter for fast negative lookups
     BloomFilter_Insert(sp->termFilter, term, len);
