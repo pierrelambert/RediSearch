@@ -789,7 +789,7 @@ tag_list(A) ::= tag_list(B) OR termlist(C) . [TAGLIST] {
 
 expr(A) ::= modifier(B) COLON numeric_range(C). {
   A = NULL;
-  if (ctx->sctx->spec && !FIELD_IS(B.fs, INDEXFLD_T_NUMERIC)) {
+  if (ctx->sctx->spec && !FIELD_IS(B.fs, INDEXFLD_T_NUMERIC) && !FIELD_IS(B.fs, INDEXFLD_T_DATETIME)) {
     REPORT_WRONG_FIELD_TYPE(B, SPEC_NUMERIC_STR);
     QueryParam_Free(C);
   } else if (C) {
@@ -843,7 +843,7 @@ numeric_range(A) ::= LSQB param_num(B) RSQB. [NUMBER]{
 }
 
 expr(A) ::= modifier(B) NOT_EQUAL param_num(C) . {
-  if (ctx->sctx->spec && !FIELD_IS(B.fs, INDEXFLD_T_NUMERIC)) {
+  if (ctx->sctx->spec && !FIELD_IS(B.fs, INDEXFLD_T_NUMERIC) && !FIELD_IS(B.fs, INDEXFLD_T_DATETIME)) {
     REPORT_WRONG_FIELD_TYPE(B, SPEC_NUMERIC_STR);
     A = NULL;
   } else {
@@ -854,7 +854,7 @@ expr(A) ::= modifier(B) NOT_EQUAL param_num(C) . {
 }
 
 expr(A) ::= modifier(B) EQUALS param_num(C) . {
-  if (ctx->sctx->spec && !FIELD_IS(B.fs, INDEXFLD_T_NUMERIC)) {
+  if (ctx->sctx->spec && !FIELD_IS(B.fs, INDEXFLD_T_NUMERIC) && !FIELD_IS(B.fs, INDEXFLD_T_DATETIME)) {
     REPORT_WRONG_FIELD_TYPE(B, SPEC_NUMERIC_STR);
     A = NULL;
   } else {
@@ -864,7 +864,7 @@ expr(A) ::= modifier(B) EQUALS param_num(C) . {
 }
 
 expr(A) ::= modifier(B) GT param_num(C) . {
-  if (ctx->sctx->spec && !FIELD_IS(B.fs, INDEXFLD_T_NUMERIC)) {
+  if (ctx->sctx->spec && !FIELD_IS(B.fs, INDEXFLD_T_NUMERIC) && !FIELD_IS(B.fs, INDEXFLD_T_DATETIME)) {
     REPORT_WRONG_FIELD_TYPE(B, SPEC_NUMERIC_STR);
     A = NULL;
   } else {
@@ -874,7 +874,7 @@ expr(A) ::= modifier(B) GT param_num(C) . {
 }
 
 expr(A) ::= modifier(B) GE param_num(C) . {
-  if (ctx->sctx->spec && !FIELD_IS(B.fs, INDEXFLD_T_NUMERIC)) {
+  if (ctx->sctx->spec && !FIELD_IS(B.fs, INDEXFLD_T_NUMERIC) && !FIELD_IS(B.fs, INDEXFLD_T_DATETIME)) {
     REPORT_WRONG_FIELD_TYPE(B, SPEC_NUMERIC_STR);
     A = NULL;
   } else {
@@ -884,7 +884,7 @@ expr(A) ::= modifier(B) GE param_num(C) . {
 }
 
 expr(A) ::= modifier(B) LT param_num(C) . {
-  if (ctx->sctx->spec && !FIELD_IS(B.fs, INDEXFLD_T_NUMERIC)) {
+  if (ctx->sctx->spec && !FIELD_IS(B.fs, INDEXFLD_T_NUMERIC) && !FIELD_IS(B.fs, INDEXFLD_T_DATETIME)) {
     REPORT_WRONG_FIELD_TYPE(B, SPEC_NUMERIC_STR);
     A = NULL;
   } else {
@@ -894,7 +894,7 @@ expr(A) ::= modifier(B) LT param_num(C) . {
 }
 
 expr(A) ::= modifier(B) LE param_num(C) . {
-  if (ctx->sctx->spec && !FIELD_IS(B.fs, INDEXFLD_T_NUMERIC)) {
+  if (ctx->sctx->spec && !FIELD_IS(B.fs, INDEXFLD_T_NUMERIC) && !FIELD_IS(B.fs, INDEXFLD_T_DATETIME)) {
     REPORT_WRONG_FIELD_TYPE(B, SPEC_NUMERIC_STR);
     A = NULL;
   } else {
