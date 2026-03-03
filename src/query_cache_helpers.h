@@ -40,9 +40,10 @@ CachedDocIds *QueryCache_SerializeDocIds(SearchResult **results, size_t count, s
  *
  * @param cached_data Pointer to cached data (CachedDocIds structure)
  * @param data_size Size of the cached data
+ * @param docs DocTable to load document metadata from
  * @return Array of SearchResult pointers (caller must free with array_free)
  */
-SearchResult **QueryCache_DeserializeDocIds(const uint8_t *cached_data, size_t data_size);
+SearchResult **QueryCache_DeserializeDocIds(const uint8_t *cached_data, size_t data_size, const DocTable *docs);
 
 /**
  * Check if a query should be cached.

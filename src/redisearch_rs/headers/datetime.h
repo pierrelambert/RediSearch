@@ -48,7 +48,7 @@ extern "C" {
 //     printf("Timestamp: %lld\n", timestamp);
 // }
 // ```
-int ParseISO8601(const char *str, int64_t *out_timestamp);
+int DateTime_ParseISO8601(const char *str, int64_t *out_timestamp);
 
 #ifdef __cplusplus
 }  // extern "C"

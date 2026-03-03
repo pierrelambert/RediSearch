@@ -274,13 +274,15 @@ void fillReplyWithIndexInfo(RedisSearchCtx* sctx, RedisModule_Reply *reply, bool
   size_t text_overhead = IndexSpec_collect_text_overhead(sp);
   REPLY_KVNUM("text_overhead_sz_mb", text_overhead / (float)0x100000);
 
-  // Bloom filter stats
+  // Bloom filter stats (report 0 if not yet initialized)
+  size_t bloom_mem = 0;
+  size_t bloom_count = 0;
   if (sp->termFilter) {
-    size_t bloom_mem = BloomFilter_MemUsage(sp->termFilter);
-    size_t bloom_count = BloomFilter_Count(sp->termFilter);
-    REPLY_KVNUM("bloom_filter_sz_mb", bloom_mem / (float)0x100000);
-    REPLY_KVINT("bloom_filter_terms", bloom_count);
+    bloom_mem = BloomFilter_MemUsage(sp->termFilter);
+    bloom_count = BloomFilter_Count(sp->termFilter);
   }
+  REPLY_KVNUM("bloom_filter_sz_mb", bloom_mem / (float)0x100000);
+  REPLY_KVINT("bloom_filter_terms", bloom_count);
   REPLY_KVNUM("total_index_memory_sz_mb", IndexSpec_TotalMemUsage(specForOpeningIndexes, dt_tm_size,
     tags_overhead, text_overhead, vector_indexes_size) / (float)0x100000);
   REPLY_KVNUM("geoshapes_sz_mb", geom_idx_sz / (float)0x100000);
@@ -314,9 +316,9 @@ void fillReplyWithIndexInfo(RedisSearchCtx* sctx, RedisModule_Reply *reply, bool
 
   Cursors_RenderStats(&g_CursorsList, &g_CursorsListCoord, sp, reply);
 
-  // Query cache stats
-  QueryCacheStats cache_stats = QueryCacheIntegration_GetStats();
-  if (cache_stats.hits > 0 || cache_stats.misses > 0) {
+  // Query cache stats - only show if cache is enabled (max_size > 0)
+  if (RSGlobalConfig.queryCacheMaxSize > 0) {
+    QueryCacheStats cache_stats = QueryCacheIntegration_GetStats();
     RedisModule_ReplyKV_Map(reply, "query_cache_stats");
     REPLY_KVINT("hits", cache_stats.hits);
     REPLY_KVINT("misses", cache_stats.misses);
