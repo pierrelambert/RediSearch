@@ -1,3 +1,5 @@
 ADD_LIBRARY(fast_float_strtod OBJECT fast_float_strtod.cpp)
 target_compile_definitions(fast_float_strtod PRIVATE FASTFLOAT_SKIP_WHITE_SPACE)
 target_compile_definitions(fast_float_strtod PRIVATE FASTFLOAT_ALLOWS_LEADING_PLUS)
+# fast_float requires C++17 or later
+set_target_properties(fast_float_strtod PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
