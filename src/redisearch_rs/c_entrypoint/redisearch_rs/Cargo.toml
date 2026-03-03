@@ -34,6 +34,7 @@ walkdir.workspace = true
 [dependencies]
 bloom_filter_ffi = { path = "../bloom_filter_ffi" }
 buffer = { workspace = true }
+datetime_ffi = { path = "../datetime_ffi" }
 fnv_ffi = { path = "../fnv_ffi" }
 idf_ffi = { path = "../idf_ffi" }
 inverted_index_ffi = { path = "../inverted_index_ffi" }
