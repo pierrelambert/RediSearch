@@ -17,7 +17,10 @@
 use std::ffi::{CStr, CString, c_char};
 use std::ptr;
 
-use sql_parser::{Command, translate};
+use sql_parser::{
+    CacheConfig, CacheStats, Command, clear_cache, get_cache_stats, set_cache_config, translate,
+    translate_cached,
+};
 
 /// Command type for the translation result.
 #[repr(C)]
@@ -207,6 +210,151 @@ pub unsafe extern "C" fn sql_translation_result_free(result: SqlTranslationResul
     }
 }
 
+/// Translates a SQL query to RQL format with caching.
+///
+/// This function caches translation results, so repeated calls with the same
+/// SQL string will return cached results (improving performance).
+///
+/// # Safety
+///
+/// - `sql` must be a valid null-terminated C string
+/// - The returned `SqlTranslationResult` must be freed with `sql_translation_result_free`
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sql_translate_cached(sql: *const c_char) -> SqlTranslationResult {
+    if sql.is_null() {
+        return SqlTranslationResult {
+            success: false,
+            command: SqlCommand::Search,
+            index_name: ptr::null_mut(),
+            query_string: ptr::null_mut(),
+            arguments: ptr::null_mut(),
+            arguments_len: 0,
+            error_message: CString::new("SQL query is null")
+                .expect("CString::new failed")
+                .into_raw(),
+        };
+    }
+
+    // SAFETY: Caller guarantees sql is a valid null-terminated string
+    let sql_str = match unsafe { CStr::from_ptr(sql) }.to_str() {
+        Ok(s) => s,
+        Err(_) => {
+            return SqlTranslationResult {
+                success: false,
+                command: SqlCommand::Search,
+                index_name: ptr::null_mut(),
+                query_string: ptr::null_mut(),
+                arguments: ptr::null_mut(),
+                arguments_len: 0,
+                error_message: CString::new("SQL query contains invalid UTF-8")
+                    .expect("CString::new failed")
+                    .into_raw(),
+            };
+        }
+    };
+
+    match translate_cached(sql_str) {
+        Ok(translation) => {
+            let index_name = CString::new(translation.index_name)
+                .expect("CString::new failed for index_name")
+                .into_raw();
+            let query_string = CString::new(translation.query_string)
+                .expect("CString::new failed for query_string")
+                .into_raw();
+
+            // Convert arguments Vec<String> to C array
+            let arguments_len = translation.arguments.len();
+            let arguments = if arguments_len > 0 {
+                let mut args: Vec<*mut c_char> = translation
+                    .arguments
+                    .into_iter()
+                    .map(|arg| {
+                        CString::new(arg)
+                            .expect("CString::new failed for argument")
+                            .into_raw()
+                    })
+                    .collect();
+                let ptr = args.as_mut_ptr();
+                std::mem::forget(args);
+                ptr
+            } else {
+                ptr::null_mut()
+            };
+
+            SqlTranslationResult {
+                success: true,
+                command: translation.command.into(),
+                index_name,
+                query_string,
+                arguments,
+                arguments_len,
+                error_message: ptr::null_mut(),
+            }
+        }
+        Err(err) => SqlTranslationResult {
+            success: false,
+            command: SqlCommand::Search,
+            index_name: ptr::null_mut(),
+            query_string: ptr::null_mut(),
+            arguments: ptr::null_mut(),
+            arguments_len: 0,
+            error_message: CString::new(err.to_string())
+                .expect("CString::new failed for error")
+                .into_raw(),
+        },
+    }
+}
+
+/// Cache statistics returned by `sql_cache_get_stats`.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct SqlCacheStats {
+    /// Number of entries currently in the cache.
+    pub entries: usize,
+    /// Total number of cache hits.
+    pub hits: u64,
+    /// Total number of cache misses.
+    pub misses: u64,
+    /// Hit rate as an integer percentage (0-100).
+    pub hit_rate_percent: u32,
+}
+
+impl From<CacheStats> for SqlCacheStats {
+    fn from(stats: CacheStats) -> Self {
+        Self {
+            entries: stats.entries,
+            hits: stats.hits,
+            misses: stats.misses,
+            hit_rate_percent: stats.hit_rate() as u32,
+        }
+    }
+}
+
+/// Clear the SQL translation cache.
+///
+/// This removes all cached translations and resets hit/miss statistics.
+#[unsafe(no_mangle)]
+pub extern "C" fn sql_cache_clear() {
+    clear_cache();
+}
+
+/// Get SQL cache statistics.
+///
+/// Returns current cache state including entry count, hits, misses, and hit rate.
+#[unsafe(no_mangle)]
+pub extern "C" fn sql_cache_get_stats() -> SqlCacheStats {
+    get_cache_stats().into()
+}
+
+/// Set the maximum number of entries in the SQL translation cache.
+///
+/// If the new limit is smaller than the current number of entries,
+/// the least recently used entries are evicted.
+#[unsafe(no_mangle)]
+pub extern "C" fn sql_cache_set_max_entries(max_entries: usize) {
+    set_cache_config(CacheConfig { max_entries });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -297,5 +445,83 @@ mod tests {
         unsafe {
             sql_translation_result_free(result);
         }
+    }
+
+    // Use a mutex to serialize cache-related tests
+    use std::sync::Mutex;
+    static CACHE_TEST_MUTEX: Mutex<()> = Mutex::new(());
+
+    fn with_clean_cache<T>(f: impl FnOnce() -> T) -> T {
+        let _guard = CACHE_TEST_MUTEX.lock().expect("Cache test mutex poisoned");
+        sql_cache_clear();
+        sql_cache_set_max_entries(1000); // Reset to default
+        f()
+    }
+
+    #[test]
+    fn test_ffi_cached_translation() {
+        with_clean_cache(|| {
+            let sql = CString::new("SELECT * FROM ffi_cached_idx").unwrap();
+
+            // First call - should be a miss
+            // SAFETY: sql is a valid null-terminated C string
+            let result1 = unsafe { sql_translate_cached(sql.as_ptr()) };
+            assert!(result1.success);
+            let stats1 = sql_cache_get_stats();
+            assert_eq!(stats1.misses, 1);
+
+            // SAFETY: result1 was returned by sql_translate_cached
+            unsafe {
+                sql_translation_result_free(result1);
+            }
+
+            // Second call - should be a hit
+            // SAFETY: sql is a valid null-terminated C string
+            let result2 = unsafe { sql_translate_cached(sql.as_ptr()) };
+            assert!(result2.success);
+            let stats2 = sql_cache_get_stats();
+            assert_eq!(stats2.hits, 1);
+
+            // SAFETY: result2 was returned by sql_translate_cached
+            unsafe {
+                sql_translation_result_free(result2);
+            }
+        });
+    }
+
+    #[test]
+    fn test_ffi_cache_stats() {
+        with_clean_cache(|| {
+            let stats = sql_cache_get_stats();
+            assert_eq!(stats.entries, 0);
+            assert_eq!(stats.hits, 0);
+            assert_eq!(stats.misses, 0);
+        });
+    }
+
+    #[test]
+    fn test_ffi_cache_set_max_entries() {
+        with_clean_cache(|| {
+            sql_cache_set_max_entries(2);
+
+            // Fill cache with 3 queries
+            let sql1 = CString::new("SELECT * FROM ffi_evict_idx1").unwrap();
+            let sql2 = CString::new("SELECT * FROM ffi_evict_idx2").unwrap();
+            let sql3 = CString::new("SELECT * FROM ffi_evict_idx3").unwrap();
+
+            // SAFETY: all sql strings are valid null-terminated C strings
+            unsafe {
+                let r1 = sql_translate_cached(sql1.as_ptr());
+                sql_translation_result_free(r1);
+                let r2 = sql_translate_cached(sql2.as_ptr());
+                sql_translation_result_free(r2);
+                let r3 = sql_translate_cached(sql3.as_ptr());
+                sql_translation_result_free(r3);
+            }
+
+            // Should only have 2 entries due to eviction
+            let stats = sql_cache_get_stats();
+            assert_eq!(stats.entries, 2);
+        });
     }
 }

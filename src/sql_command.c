@@ -28,8 +28,8 @@ int SQLCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
   size_t sql_len;
   const char *sql = RedisModule_StringPtrLen(argv[1], &sql_len);
 
-  // Call Rust FFI to translate SQL to RQL
-  SqlTranslationResult result = sql_translate(sql);
+  // Call Rust FFI to translate SQL to RQL (with caching for performance)
+  SqlTranslationResult result = sql_translate_cached(sql);
 
   // Handle translation error
   if (!result.success) {

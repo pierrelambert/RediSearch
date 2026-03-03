@@ -51,11 +51,15 @@
 //! ```
 
 pub mod ast;
+pub mod cache;
 pub mod error;
 pub mod parser;
 pub mod translator;
 pub mod validation;
 
+pub use cache::{
+    CacheConfig, CacheStats, clear_cache, get_cache_stats, set_cache_config, translate_cached,
+};
 pub use error::SqlError;
 
 /// The type of Redis command to use for the query.
