@@ -431,18 +431,19 @@ static void sendChunk_Resp2(AREQ *req, RedisModule_Reply *reply, size_t limit,
     // Try cache lookup before executing query
     if (RSGlobalConfig.queryCacheMaxSize > 0) {
       QEFlags reqFlags = AREQ_RequestFlags(req);
-      if (QueryCache_ShouldCache(reqFlags, limit)) {
+
+      // Get limit and offset from arrange step first
+      AGGPlan *plan = AREQ_AGGPlan(req);
+      PLN_ArrangeStep *arng = AGPLN_GetArrangeStep(plan);
+      size_t result_limit = arng && arng->isLimited ? arng->limit : DEFAULT_LIMIT;
+      size_t result_offset = arng && arng->isLimited ? arng->offset : 0;
+
+      if (QueryCache_ShouldCache(reqFlags, result_limit)) {
         RedisSearchCtx *sctx = AREQ_SearchCtx(req);
         if (sctx && sctx->spec) {
           // Get query parameters
           const char *index_name = IndexSpec_FormatName(sctx->spec, false);
           const char *query_string = req->query;
-
-          // Get limit and offset from arrange step
-          AGGPlan *plan = AREQ_AGGPlan(req);
-          PLN_ArrangeStep *arng = AGPLN_GetArrangeStep(plan);
-          size_t result_limit = arng && arng->isLimited ? arng->limit : limit;
-          size_t result_offset = arng && arng->isLimited ? arng->offset : 0;
 
           // TODO: Serialize sort parameters
           const char *sort_params = NULL;
@@ -606,18 +607,19 @@ done_2_err:
     // Store results in cache if caching is enabled and query is cacheable
     if (RSGlobalConfig.queryCacheMaxSize > 0 && results != NULL && rc == RS_RESULT_OK) {
       QEFlags reqFlags = AREQ_RequestFlags(req);
-      if (QueryCache_ShouldCache(reqFlags, limit)) {
+
+      // Get limit and offset from arrange step first
+      AGGPlan *plan = AREQ_AGGPlan(req);
+      PLN_ArrangeStep *arng = AGPLN_GetArrangeStep(plan);
+      size_t result_limit = arng && arng->isLimited ? arng->limit : DEFAULT_LIMIT;
+      size_t result_offset = arng && arng->isLimited ? arng->offset : 0;
+
+      if (QueryCache_ShouldCache(reqFlags, result_limit)) {
         RedisSearchCtx *sctx = AREQ_SearchCtx(req);
         if (sctx && sctx->spec) {
           // Get query parameters
           const char *index_name = IndexSpec_FormatName(sctx->spec, false);
           const char *query_string = req->query;
-
-          // Get limit and offset from arrange step
-          AGGPlan *plan = AREQ_AGGPlan(req);
-          PLN_ArrangeStep *arng = AGPLN_GetArrangeStep(plan);
-          size_t result_limit = arng && arng->isLimited ? arng->limit : limit;
-          size_t result_offset = arng && arng->isLimited ? arng->offset : 0;
 
           // TODO: Serialize sort parameters
           const char *sort_params = NULL;
@@ -707,17 +709,18 @@ static void sendChunk_Resp3(AREQ *req, RedisModule_Reply *reply, size_t limit,
     // Try cache lookup before executing query
     if (RSGlobalConfig.queryCacheMaxSize > 0) {
       QEFlags reqFlags = AREQ_RequestFlags(req);
-      if (QueryCache_ShouldCache(reqFlags, limit)) {
+
+      // Get limit and offset from arrange step first
+      AGGPlan *plan = AREQ_AGGPlan(req);
+      PLN_ArrangeStep *arng = AGPLN_GetArrangeStep(plan);
+      size_t result_limit = arng && arng->isLimited ? arng->limit : DEFAULT_LIMIT;
+      size_t result_offset = arng && arng->isLimited ? arng->offset : 0;
+
+      if (QueryCache_ShouldCache(reqFlags, result_limit)) {
         if (sctx && sctx->spec) {
           // Get query parameters
           const char *index_name = IndexSpec_FormatName(sctx->spec, false);
           const char *query_string = req->query;
-
-          // Get limit and offset from arrange step
-          AGGPlan *plan = AREQ_AGGPlan(req);
-          PLN_ArrangeStep *arng = AGPLN_GetArrangeStep(plan);
-          size_t result_limit = arng && arng->isLimited ? arng->limit : limit;
-          size_t result_offset = arng && arng->isLimited ? arng->offset : 0;
 
           // TODO: Serialize sort parameters
           const char *sort_params = NULL;
@@ -869,17 +872,18 @@ done_3_err:
     // Store results in cache if caching is enabled and query is cacheable
     if (RSGlobalConfig.queryCacheMaxSize > 0 && results != NULL && rc == RS_RESULT_OK) {
       QEFlags reqFlags = AREQ_RequestFlags(req);
-      if (QueryCache_ShouldCache(reqFlags, limit)) {
+
+      // Get limit and offset from arrange step first
+      AGGPlan *plan = AREQ_AGGPlan(req);
+      PLN_ArrangeStep *arng = AGPLN_GetArrangeStep(plan);
+      size_t result_limit = arng && arng->isLimited ? arng->limit : DEFAULT_LIMIT;
+      size_t result_offset = arng && arng->isLimited ? arng->offset : 0;
+
+      if (QueryCache_ShouldCache(reqFlags, result_limit)) {
         if (sctx && sctx->spec) {
           // Get query parameters
           const char *index_name = IndexSpec_FormatName(sctx->spec, false);
           const char *query_string = req->query;
-
-          // Get limit and offset from arrange step
-          AGGPlan *plan = AREQ_AGGPlan(req);
-          PLN_ArrangeStep *arng = AGPLN_GetArrangeStep(plan);
-          size_t result_limit = arng && arng->isLimited ? arng->limit : limit;
-          size_t result_offset = arng && arng->isLimited ? arng->offset : 0;
 
           // TODO: Serialize sort parameters
           const char *sort_params = NULL;

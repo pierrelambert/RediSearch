@@ -106,12 +106,12 @@ bool QueryCache_ShouldCache(QEFlags reqFlags, uint64_t limit) {
   if (reqFlags & QEXEC_F_IS_CURSOR) {
     return false;
   }
-  
+
   // Don't cache unlimited queries (LIMIT 0 0 or very large limits)
   if (limit == UINT64_MAX || limit == 0) {
     return false;
   }
-  
+
   return true;
 }
 
