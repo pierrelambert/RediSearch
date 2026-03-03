@@ -36,9 +36,10 @@ typedef enum {
   INDEXFLD_T_TAG = 0x08,
   INDEXFLD_T_VECTOR = 0x10,
   INDEXFLD_T_GEOMETRY = 0x20,
+  INDEXFLD_T_DATETIME = 0x40,
 } FieldType;
 
-#define INDEXFLD_NUM_TYPES 6
+#define INDEXFLD_NUM_TYPES 7
 
 // clang-format off
 // otherwise, it looks h o r r i b l e
@@ -48,7 +49,8 @@ typedef enum {
   (T == INDEXFLD_T_GEO        ? 2 : \
   (T == INDEXFLD_T_TAG        ? 3 : \
   (T == INDEXFLD_T_VECTOR     ? 4 : \
-  (T == INDEXFLD_T_GEOMETRY   ? 5 : -1))))))
+  (T == INDEXFLD_T_GEOMETRY   ? 5 : \
+  (T == INDEXFLD_T_DATETIME   ? 6 : -1)))))))
 
 #define INDEXTYPE_FROM_POS(P) (1<<(P))
 // clang-format on
@@ -59,6 +61,7 @@ typedef enum {
 #define IXFLDPOS_TAG INDEXTYPE_TO_POS(INDEXFLD_T_TAG)
 #define IXFLDPOS_VECTOR INDEXTYPE_TO_POS(INDEXFLD_T_VECTOR)
 #define IXFLDPOS_GEOMETRY INDEXTYPE_TO_POS(INDEXFLD_T_GEOMETRY)
+#define IXFLDPOS_DATETIME INDEXTYPE_TO_POS(INDEXFLD_T_DATETIME)
 
 RS_ENUM_BITWISE_HELPER(FieldType)
 

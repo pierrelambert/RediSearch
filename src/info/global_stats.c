@@ -252,5 +252,9 @@ void FieldsGlobalStats_UpdateFieldDocsIndexed(FieldType field_types, int toAdd) 
     case INDEXFLD_T_GEOMETRY:
       RSGlobalStats.fieldsStats.geometryTotalDocsIndexed += toAdd;
       break;
+    case INDEXFLD_T_DATETIME:
+      // DATETIME uses numeric infrastructure, track with numeric stats
+      RSGlobalStats.fieldsStats.numericTotalDocsIndexed += toAdd;
+      break;
   }
 }

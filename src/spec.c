@@ -1371,6 +1371,12 @@ static int parseFieldSpec(ArgsCursor *ac, IndexSpec *sp, StrongRef sp_ref, Field
     if (AC_AdvanceIfMatch(ac, SPEC_INDEXMISSING_STR)) {
       fs->options |= FieldSpec_IndexMissing;
     }
+  } else if (AC_AdvanceIfMatch(ac, SPEC_DATETIME_STR)) {  // datetime field
+    if (!SearchDisk_MarkUnsupportedFieldIfDiskEnabled(SPEC_DATETIME_STR, fs, status)) goto error;
+    fs->types |= INDEXFLD_T_DATETIME;
+    if (AC_AdvanceIfMatch(ac, SPEC_INDEXMISSING_STR)) {
+      fs->options |= FieldSpec_IndexMissing;
+    }
   } else {
     QueryError_SetWithUserDataFmt(status, QUERY_ERROR_CODE_PARSE_ARGS, "Invalid field type for field", " `%s`", HiddenString_GetUnsafe(fs->fieldName, NULL));
     goto error;
