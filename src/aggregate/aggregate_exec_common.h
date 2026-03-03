@@ -29,6 +29,7 @@ typedef struct CommonPipelineCtx {
   struct timespec *timeout;
   RSOomPolicy oomPolicy;
   bool skipTimeoutChecks;
+  bool needsAggregation;  // Force aggregation for caching
 } CommonPipelineCtx;
 
 void startPipelineCommon(CommonPipelineCtx *ctx, ResultProcessor *rp, SearchResult ***results, SearchResult *r, int *rc);

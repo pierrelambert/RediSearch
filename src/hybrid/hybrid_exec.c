@@ -179,6 +179,7 @@ static void startPipelineHybrid(HybridRequest *hreq, ResultProcessor *rp, Search
     .timeout = &hreq->sctx->time.timeout,
     .oomPolicy = hreq->reqConfig.oomPolicy,
     .skipTimeoutChecks = !HybridRequest_ShouldCheckTimeout(hreq),
+    .needsAggregation = false,  // Hybrid queries don't use cache yet
   };
   startPipelineCommon(&ctx, rp, results, r, rc);
 }
