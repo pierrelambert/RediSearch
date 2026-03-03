@@ -203,6 +203,9 @@ if(APPLE)
 
     set(SSL_LIBS ${OPENSSL_LIBRARIES})
     set(CMAKE_LD_FLAGS "${CMAKE_LD_FLAGS} -dynamiclib")
+
+    # Link CoreFoundation framework (required by chrono crate's iana-time-zone dependency)
+    set(CMAKE_LD_LIBS "-framework CoreFoundation")
 else()
     set(SSL_LIBS crypto crypt ssl)
 endif()
