@@ -348,6 +348,9 @@ typedef struct IndexSpec {
   // Count the number of times the index was used
   long long counter;
 
+  // Query cache invalidation counter - bumped on any write operation
+  uint64_t revision;
+
   // read write lock
   pthread_rwlock_t rwlock;
 
@@ -718,6 +721,15 @@ size_t IndexSpec_TotalMemUsage(IndexSpec *sp, size_t doctable_tm_size, size_t ta
 */
 const char *IndexSpec_FormatName(const IndexSpec *sp, bool obfuscate);
 char *IndexSpec_FormatObfuscatedName(const HiddenString *specName);
+
+/**
+ * Atomically increment the index revision counter.
+ * This invalidates all cached query results for this index.
+ * Should be called on any write operation (add, update, delete, schema change).
+ *
+ * @param spec The index specification
+ */
+void IndexSpec_BumpRevision(IndexSpec *spec);
 
 //---------------------------------------------------------------------------------------------
 

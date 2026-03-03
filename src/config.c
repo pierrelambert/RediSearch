@@ -1241,6 +1241,23 @@ int get_on_oom(const char *name, void *privdata){
   return *((RSOomPolicy *)privdata);
 }
 
+// QUERYCACHE_MAX_SIZE
+CONFIG_SETTER(setQueryCacheMaxSize) {
+  size_t val;
+  int acrc = AC_GetSize(ac, &val, AC_F_GE0);
+  CHECK_RETURN_PARSE_ERROR(acrc);
+  config->queryCacheMaxSize = val;
+  // Resize the cache if it's already initialized
+  extern void QueryCacheIntegration_Resize(size_t new_max_entries);
+  QueryCacheIntegration_Resize(val);
+  return REDISMODULE_OK;
+}
+
+CONFIG_GETTER(getQueryCacheMaxSize) {
+  sds ss = sdsempty();
+  return sdscatprintf(ss, "%zu", config->queryCacheMaxSize);
+}
+
 RSConfig RSGlobalConfig = RS_DEFAULT_CONFIG;
 
 static RSConfigVar *findConfigVar(const RSConfigOptions *config, const char *name) {
@@ -1596,6 +1613,10 @@ RSConfigOptions RSGlobalConfigOptions = {
          .helpText = "Simulate working under Flex conditions. This is used for testing only.",
          .setValue = setDebugSimulateInFlex,
          .getValue = getDebugSimulateInFlex},
+        {.name = "QUERYCACHE_MAX_SIZE",
+         .helpText = "Maximum number of entries in the query result cache (0 = disabled, default: 1000)",
+         .setValue = setQueryCacheMaxSize,
+         .getValue = getQueryCacheMaxSize},
         {.name = NULL}}};
 
 void RSConfigOptions_AddConfigs(RSConfigOptions *src, RSConfigOptions *dst) {

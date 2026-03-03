@@ -212,6 +212,8 @@ typedef struct {
   bool infoEmitOnZeroIndexes;
   // Simulate working under Flex conditions. This is used for testing only.
   bool simulateInFlex;
+  // Maximum number of entries in the query result cache (0 = disabled)
+  size_t queryCacheMaxSize;
 } RSConfig;
 
 typedef enum {
@@ -345,6 +347,7 @@ char *getRedisConfigValue(RedisModuleCtx *ctx, const char* confName);
 #define DEFAULT_MIN_TRIM_DELAY 2000  // 2 seconds in milliseconds
 #define DEFAULT_MAX_TRIM_DELAY 5000  // 5 seconds in milliseconds
 #define DEFAULT_TRIMMING_STATE_CHECK_DELAY 100 // 0.1 seconds in milliseconds (We check the trimming state every 0.1 seconds, between MIN_TRIM_DELAY and MAX_TRIM_DELAY)
+#define DEFAULT_QUERY_CACHE_MAX_SIZE 1000  // Default maximum number of cached queries
 
 // default configuration
 #define RS_DEFAULT_CONFIG {                                                    \
@@ -400,7 +403,8 @@ char *getRedisConfigValue(RedisModuleCtx *ctx, const char* confName);
     .maxTrimDelayMS = DEFAULT_MAX_TRIM_DELAY,                                  \
     .trimmingStateCheckDelayMS = DEFAULT_TRIMMING_STATE_CHECK_DELAY,           \
     .infoEmitOnZeroIndexes = false,                                            \
-    .simulateInFlex = false,           \
+    .simulateInFlex = false,                                                   \
+    .queryCacheMaxSize = DEFAULT_QUERY_CACHE_MAX_SIZE,                         \
   }
 
 #define REDIS_ARRAY_LIMIT 7
