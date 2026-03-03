@@ -146,6 +146,8 @@ typedef enum {
 typedef struct {
   uint32_t maxIdle;     // Maximum idle time for the cursor (from MAXIDLE parameter)
   uint32_t chunkSize;   // Number of results per cursor read (from COUNT parameter)
+  bool adaptive;        // Enable adaptive chunk sizing (from ADAPTIVE parameter)
+  uint32_t targetMs;    // Target milliseconds per chunk for adaptive mode (default: 10)
 } CursorConfig;
 
 // Context structure for parseAggPlan to reduce parameter count
