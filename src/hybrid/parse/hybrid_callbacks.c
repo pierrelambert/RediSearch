@@ -171,6 +171,9 @@ void handleWithCursor(ArgParser *parser, const void *value, void *user_data) {
                           .type = AC_ARGTYPE_UINT,
                           .target = &ctx->cursorConfig->chunkSize,
                           .intflags = AC_F_GE1},
+                         {.name = "ADAPTIVE",
+                          .type = AC_ARGTYPE_BOOLFLAG,
+                          .target = &ctx->cursorConfig->adaptive},
                          {NULL}};
 
     int rv;
@@ -182,6 +185,11 @@ void handleWithCursor(ArgParser *parser, const void *value, void *user_data) {
 
     if (ctx->cursorConfig->maxIdle == 0 || ctx->cursorConfig->maxIdle > RSGlobalConfig.cursorMaxIdle) {
         ctx->cursorConfig->maxIdle = RSGlobalConfig.cursorMaxIdle;
+    }
+
+    // Set default target for adaptive mode
+    if (ctx->cursorConfig->adaptive && ctx->cursorConfig->targetMs == 0) {
+        ctx->cursorConfig->targetMs = 10; // Default: 10ms per chunk
     }
 }
 

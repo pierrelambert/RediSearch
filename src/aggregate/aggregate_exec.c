@@ -6,6 +6,7 @@
  * (RSALv2); or (b) the Server Side Public License v1 (SSPLv1); or (c) the
  * GNU Affero General Public License v3 (AGPLv3).
 */
+#include <time.h>
 #include "redismodule.h"
 #include "redisearch.h"
 #include "search_ctx.h"
@@ -761,10 +762,54 @@ void sendChunk(AREQ *req, RedisModule_Reply *reply, size_t limit) {
   QueryProcessingCtx *qctx = AREQ_QueryProcessingCtx(req);
   qctx->resultLimit = limit;
 
+  // Track timing for adaptive chunk sizing
+  struct timespec start_time, end_time;
+  bool is_adaptive = (reqFlags & QEXEC_F_IS_CURSOR) && req->cursorConfig.adaptive;
+  if (is_adaptive) {
+    clock_gettime(CLOCK_MONOTONIC, &start_time);
+  }
+
   if (reply->resp3) {
     sendChunk_Resp3(req, reply, limit, cv);
   } else {
     sendChunk_Resp2(req, reply, limit, cv);
+  }
+
+  // Adjust chunk size for next read if adaptive mode is enabled
+  if (is_adaptive && !(req->stateflags & QEXEC_S_ITERDONE)) {
+    clock_gettime(CLOCK_MONOTONIC, &end_time);
+
+    // Calculate elapsed time in milliseconds
+    uint64_t elapsed_ns = (end_time.tv_sec - start_time.tv_sec) * 1000000000ULL +
+                          (end_time.tv_nsec - start_time.tv_nsec);
+    uint32_t elapsed_ms = (uint32_t)(elapsed_ns / 1000000);
+
+    uint32_t target_ms = req->cursorConfig.targetMs;
+    uint32_t current_chunk = req->cursorConfig.chunkSize;
+
+    // Adjust chunk size to target the desired execution time
+    // If we're too slow, reduce chunk size; if too fast, increase it
+    if (elapsed_ms > target_ms && current_chunk > 1) {
+      // Too slow - reduce chunk size proportionally
+      uint32_t new_chunk = (uint32_t)((uint64_t)current_chunk * target_ms / elapsed_ms);
+      // Don't reduce by more than 50% at a time for stability
+      if (new_chunk < current_chunk / 2) {
+        new_chunk = current_chunk / 2;
+      }
+      if (new_chunk < 1) {
+        new_chunk = 1;
+      }
+      req->cursorConfig.chunkSize = new_chunk;
+    } else if (elapsed_ms < target_ms / 2) {
+      // Too fast - increase chunk size proportionally
+      uint32_t new_chunk = (uint32_t)((uint64_t)current_chunk * target_ms / elapsed_ms);
+      // Don't increase by more than 2x at a time for stability
+      if (new_chunk > current_chunk * 2) {
+        new_chunk = current_chunk * 2;
+      }
+      req->cursorConfig.chunkSize = new_chunk;
+    }
+    // If elapsed_ms is between target_ms/2 and target_ms, keep current chunk size
   }
 
   if (sctx->spec) {

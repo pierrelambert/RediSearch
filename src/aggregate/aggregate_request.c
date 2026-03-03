@@ -124,6 +124,9 @@ static int parseCursorSettings(uint32_t *reqflags, CursorConfig *cursorConfig, A
                         .type = AC_ARGTYPE_UINT,
                         .target = &cursorConfig->chunkSize,
                         .intflags = AC_F_GE1},
+                       {.name = "ADAPTIVE",
+                        .type = AC_ARGTYPE_BOOLFLAG,
+                        .target = &cursorConfig->adaptive},
                        {NULL}};
 
   int rv;
@@ -136,6 +139,12 @@ static int parseCursorSettings(uint32_t *reqflags, CursorConfig *cursorConfig, A
   if (cursorConfig->maxIdle == 0 || cursorConfig->maxIdle > RSGlobalConfig.cursorMaxIdle) {
     cursorConfig->maxIdle = RSGlobalConfig.cursorMaxIdle;
   }
+
+  // Set default target for adaptive mode
+  if (cursorConfig->adaptive && cursorConfig->targetMs == 0) {
+    cursorConfig->targetMs = 10; // Default: 10ms per chunk
+  }
+
   REQFLAGS_AddFlags(reqflags, QEXEC_F_IS_CURSOR);
   return REDISMODULE_OK;
 }
