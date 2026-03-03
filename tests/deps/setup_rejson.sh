@@ -60,6 +60,11 @@ if [[ -f /etc/os-release ]]; then
 fi
 
 echo "Building RedisJSON module for branch $JSON_BRANCH..."
-run_command make SAN=$SAN BINROOT=${JSON_BIN_DIR}
+# Use gmake if available (required for macOS with old system make)
+MAKE_CMD=${MAKE:-make}
+if command -v gmake &> /dev/null; then
+    MAKE_CMD=gmake
+fi
+run_command $MAKE_CMD SAN=$SAN BINROOT=${JSON_BIN_DIR}
 echo "RedisJSON module built and is available at ${JSON_BIN_PATH}"
 cd $CURR_DIR
