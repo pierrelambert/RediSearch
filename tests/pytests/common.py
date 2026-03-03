@@ -476,7 +476,19 @@ def to_dict(res):
         return res
     if len(res) % 2 != 0:
         raise ValueError(f"to_dict expects even-length array (key-value pairs), got {len(res)} elements")
-    d = {res[i]: res[i + 1] for i in range(0, len(res), 2)}
+    d = {}
+    for i in range(0, len(res), 2):
+        key = res[i]
+        value = res[i + 1]
+        # Recursively convert nested lists to dicts
+        if isinstance(value, list) and len(value) > 0 and len(value) % 2 == 0:
+            # Check if this looks like a key-value list (all even indices are strings)
+            try:
+                if all(isinstance(value[j], (str, bytes)) for j in range(0, len(value), 2)):
+                    value = to_dict(value)
+            except:
+                pass  # Keep as list if conversion fails
+        d[key] = value
     return d
 
 def to_list(input_dict: dict):
