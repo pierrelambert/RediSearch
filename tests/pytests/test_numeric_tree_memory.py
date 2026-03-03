@@ -14,7 +14,7 @@ class TestNumericTreeMemory(object):
 
     def __init__(self):
         skipTest(cluster=True)
-        self.env = Env(testName="testing numeric tree memory optimization")
+        self.env = Env(testName="testing numeric tree memory optimization", enableDebugCommand=True)
         self.env.expect(config_cmd(), 'set', 'FORK_GC_CLEAN_THRESHOLD', 0).equal('OK')
 
     def test_sparse_data_compaction(self):
