@@ -41,7 +41,7 @@ members = [
     "varint_bencher",
     "wildcard",
     "workspace_hack",
-    "idf", "query_cache",
+    "idf", "query_cache", "datetime",
 ]
 
 resolver = "3"

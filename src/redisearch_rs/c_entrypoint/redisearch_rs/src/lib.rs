@@ -18,6 +18,7 @@
 static REDIS_MODULE_ALLOCATOR: redis_module::alloc::RedisAlloc = redis_module::alloc::RedisAlloc;
 
 pub use bloom_filter_ffi as bloom_filter;
+pub use datetime_ffi as datetime;
 pub use fnv_ffi as fnv;
 pub use idf_ffi as idf;
 pub use inverted_index_ffi as inverted_index;
