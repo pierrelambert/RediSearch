@@ -36,8 +36,17 @@ typedef struct CachedDocIds {
 CachedDocIds *QueryCache_SerializeDocIds(SearchResult **results, size_t count, size_t *size_out);
 
 /**
+ * Deserialize cached document IDs to search results.
+ *
+ * @param cached_data Pointer to cached data (CachedDocIds structure)
+ * @param data_size Size of the cached data
+ * @return Array of SearchResult pointers (caller must free with array_free)
+ */
+SearchResult **QueryCache_DeserializeDocIds(const uint8_t *cached_data, size_t data_size);
+
+/**
  * Check if a query should be cached.
- * 
+ *
  * @param reqFlags Request flags
  * @param limit Result limit
  * @return true if the query should be cached, false otherwise
