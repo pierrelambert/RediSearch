@@ -31,6 +31,7 @@
 #include "obfuscation/hidden.h"
 #include "search_disk_api.h"
 #include "rs_wall_clock.h"
+#include "redisearch_rs/headers/bloom_filter.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -309,6 +310,7 @@ typedef struct IndexSpec {
   Trie *suffix;                   // Trie of TEXT suffix tokens of terms. Used for contains queries
   t_fieldMask suffixMask;         // Mask of all fields that support contains query
   dict *keysDict;                 // Inverted indexes dictionary of all TEXT terms
+  struct BloomFilter *termFilter; // Bloom filter for fast term rejection
 
   DocTable docs;                  // Contains metadata of all documents
 
