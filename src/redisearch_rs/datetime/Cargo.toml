@@ -1,0 +1,15 @@
+[package]
+name = "datetime"
+version.workspace = true
+edition.workspace = true
+license-file.workspace = true
+publish.workspace = true
+
+[lib]
+doctest = false
+
+[dependencies]
+chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
+
+[lints]
+workspace = true
