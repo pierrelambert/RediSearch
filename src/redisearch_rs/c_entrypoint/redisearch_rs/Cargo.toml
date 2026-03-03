@@ -32,6 +32,7 @@ toml.workspace = true
 walkdir.workspace = true
 
 [dependencies]
+bloom_filter_ffi = { path = "../bloom_filter_ffi" }
 buffer = { workspace = true }
 fnv_ffi = { path = "../fnv_ffi" }
 idf_ffi = { path = "../idf_ffi" }
