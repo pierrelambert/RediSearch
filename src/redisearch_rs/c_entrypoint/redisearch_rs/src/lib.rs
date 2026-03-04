@@ -17,12 +17,15 @@
 #[global_allocator]
 static REDIS_MODULE_ALLOCATOR: redis_module::alloc::RedisAlloc = redis_module::alloc::RedisAlloc;
 
+pub use bloom_filter_ffi as bloom_filter;
+pub use datetime_ffi as datetime;
 pub use fnv_ffi as fnv;
 pub use idf_ffi as idf;
 pub use inverted_index_ffi as inverted_index;
 pub use iterators_ffi as iterators;
 pub use module_init_ffi as tracing_redismodule;
 pub use numeric_range_tree_ffi as numeric_range_tree;
+pub use query_cache_ffi as query_cache;
 pub use query_error_ffi as query_error;
 pub use query_term_ffi as query_term;
 pub use result_processor_ffi as result_processor;

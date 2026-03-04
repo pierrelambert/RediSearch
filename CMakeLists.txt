@@ -29,7 +29,22 @@ function(setup_cc_options)
     # Common compiler flags
     set(CMAKE_C_FLAGS "-fPIC -g -pthread -fno-strict-aliasing -Wno-unused-function -Wno-unused-variable -Wno-sign-compare -fcommon -funsigned-char" PARENT_SCOPE)
     set(CMAKE_CXX_FLAGS "-fPIC -g -pthread -fno-strict-aliasing -Wno-unused-function -Wno-unused-variable -Wno-sign-compare" PARENT_SCOPE)
-    set(CMAKE_CXX_STANDARD 20)
+    set(CMAKE_CXX_STANDARD 20 PARENT_SCOPE)
+    set(CMAKE_CXX_STANDARD_REQUIRED ON PARENT_SCOPE)
+
+    # On macOS, explicitly add SDK C++ headers to include path
+    # The C++ standard library headers are in the SDK, not in /usr/include
+    if(APPLE)
+        execute_process(
+            COMMAND xcrun --show-sdk-path
+            OUTPUT_VARIABLE MACOS_SDK_PATH
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+        )
+        if(MACOS_SDK_PATH)
+            include_directories(SYSTEM "${MACOS_SDK_PATH}/usr/include/c++/v1")
+            message(STATUS "Added macOS SDK C++ headers: ${MACOS_SDK_PATH}/usr/include/c++/v1")
+        endif()
+    endif()
     # Release/Debug/Profile specific flags
     if(CMAKE_BUILD_TYPE STREQUAL "Debug")
         set(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS} -O0 -fno-omit-frame-pointer -ggdb" PARENT_SCOPE)
@@ -188,6 +203,9 @@ if(APPLE)
 
     set(SSL_LIBS ${OPENSSL_LIBRARIES})
     set(CMAKE_LD_FLAGS "${CMAKE_LD_FLAGS} -dynamiclib")
+
+    # Link CoreFoundation framework (required by chrono crate's iana-time-zone dependency)
+    set(CMAKE_LD_LIBS "-framework CoreFoundation")
 else()
     set(SSL_LIBS crypto crypt ssl)
 endif()

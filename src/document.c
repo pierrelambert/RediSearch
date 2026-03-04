@@ -32,6 +32,7 @@
 #include "search_disk.h"
 #include "info/global_stats.h"
 #include "sorting_vector.h"
+#include "redisearch_rs/headers/datetime.h"
 
 // Memory pool for RSAddDocumentContext contexts
 static mempool_t *actxPool_g = NULL;
@@ -523,6 +524,74 @@ FIELD_PREPROCESSOR(numericPreprocessor) {
   return 0;
 }
 
+FIELD_PREPROCESSOR(datetimePreprocessor) {
+  switch (field->unionType) {
+    case FLD_VAR_T_RMS: {
+      fdata->isMulti = 0;
+      size_t len;
+      const char *str = RedisModule_StringPtrLen(field->text, &len);
+
+      // Try parsing as ISO-8601 first
+      int64_t timestamp;
+      if (DateTime_ParseISO8601(str, &timestamp) == 0) {
+        fdata->numeric = (double)timestamp;
+        break;
+      }
+
+      // Fall back to numeric parsing
+      if (RedisModule_StringToDouble(field->text, &fdata->numeric) == REDISMODULE_ERR) {
+        QueryError_SetWithUserDataFmt(status, QUERY_ERROR_CODE_NUMERIC_VALUE_INVALID,
+                                       "Invalid datetime value", ": '%s'", str);
+        return -1;
+      }
+      break;
+    }
+    case FLD_VAR_T_CSTR: {
+      char *end;
+      fdata->isMulti = 0;
+
+      // Try parsing as ISO-8601 first
+      int64_t timestamp;
+      if (DateTime_ParseISO8601(field->strval, &timestamp) == 0) {
+        fdata->numeric = (double)timestamp;
+        break;
+      }
+
+      // Fall back to numeric parsing
+      fdata->numeric = fast_float_strtod(field->strval, &end);
+      if (*end) {
+        QueryError_SetCode(status, QUERY_ERROR_CODE_NUMERIC_VALUE_INVALID);
+        return -1;
+      }
+      break;
+    }
+    case FLD_VAR_T_NUM:
+      fdata->isMulti = 0;
+      fdata->numeric = field->numval;
+      break;
+    case FLD_VAR_T_NULL:
+      fdata->isNull = 1;
+      return 0;
+    case FLD_VAR_T_ARRAY:
+      fdata->isMulti = 1;
+      // Borrow values
+      fdata->arrNumeric = field->arrNumval;
+      break;
+    default:
+      return -1;
+  }
+
+  // If this is a sortable datetime value - copy the value to the sorting vector
+  if (FieldSpec_IsSortable(fs)) {
+    if (field->unionType != FLD_VAR_T_ARRAY) {
+      RSSortingVector_PutNum(aCtx->sv, fs->sortIdx, fdata->numeric);
+    } else if (field->multisv) {
+      RSSortingVector_PutRSVal(aCtx->sv, fs->sortIdx, field->multisv);
+      field->multisv = NULL;
+    }
+  }
+  return 0;
+}
 
 FIELD_PREPROCESSOR(geometryPreprocessor) {
   switch (field->unionType) {
@@ -786,6 +855,7 @@ static PreprocessorFunc preprocessorMap[] = {
     [IXFLDPOS_TAG] = tagPreprocessor,
     [IXFLDPOS_VECTOR] = vectorPreprocessor,
     [IXFLDPOS_GEOMETRY] = geometryPreprocessor,
+    [IXFLDPOS_DATETIME] = datetimePreprocessor,
     };
 
 int IndexerBulkAdd(RSAddDocumentCtx *cur, RedisSearchCtx *sctx,
@@ -801,6 +871,7 @@ int IndexerBulkAdd(RSAddDocumentCtx *cur, RedisSearchCtx *sctx,
           break;
         case IXFLDPOS_NUMERIC:
         case IXFLDPOS_GEO:
+        case IXFLDPOS_DATETIME:
           rc = numericIndexer(cur, sctx, field, fs, fdata, status);
           break;
         case IXFLDPOS_VECTOR:
@@ -1002,6 +1073,21 @@ static void AddDocumentCtx_UpdateNoIndex(RSAddDocumentCtx *aCtx, RedisSearchCtx 
           double numval;
           if (RedisModule_StringToDouble(f->text, &numval) == REDISMODULE_ERR) {
             BAIL("Could not parse numeric index value");
+          }
+          RSSortingVector_PutNum(md->sortVector, idx, numval);
+          break;
+        }
+        case INDEXFLD_T_DATETIME: {
+          double numval;
+          size_t len;
+          const char *str = RedisModule_StringPtrLen(f->text, &len);
+
+          // Try parsing as ISO-8601 first
+          int64_t timestamp;
+          if (DateTime_ParseISO8601(str, &timestamp) == 0) {
+            numval = (double)timestamp;
+          } else if (RedisModule_StringToDouble(f->text, &numval) == REDISMODULE_ERR) {
+            BAIL("Could not parse datetime index value");
           }
           RSSortingVector_PutNum(md->sortVector, idx, numval);
           break;

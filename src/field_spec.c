@@ -56,7 +56,7 @@ void FieldSpec_Cleanup(FieldSpec* fs) {
       fs->tagOpts.tagIndex = NULL;
     }
   }
-  if (FIELD_IS(fs, INDEXFLD_T_NUMERIC | INDEXFLD_T_GEO)) {
+  if (FIELD_IS(fs, INDEXFLD_T_NUMERIC | INDEXFLD_T_GEO | INDEXFLD_T_DATETIME)) {
     if (fs->tree) {
       NumericRangeTree_Free(fs->tree);
       fs->tree = NULL;
@@ -77,6 +77,7 @@ const char *FieldSpec_GetTypeNames(int idx) {
   case IXFLDPOS_GEO:      return SPEC_GEO_STR;
   case IXFLDPOS_VECTOR:   return SPEC_VECTOR_STR;
   case IXFLDPOS_GEOMETRY: return SPEC_GEOMETRY_STR;
+  case IXFLDPOS_DATETIME: return SPEC_DATETIME_STR;
 
   default:
     RS_ABORT_ALWAYS("oops");

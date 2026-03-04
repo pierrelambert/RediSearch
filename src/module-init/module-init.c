@@ -34,6 +34,7 @@
 #include "info/info_redis/info_redis.h"
 #include "util/logging.h"
 #include "asm_state_machine.h"
+#include "query_cache_integration.h"
 
 #define DEPLETER_POOL_SIZE 4
 
@@ -219,5 +220,10 @@ int RediSearch_Init(RedisModuleCtx *ctx, int mode) {
   VecSim_SetMemoryFunctions(vecsimMemoryFunctions);
   VecSim_SetTimeoutCallbackFunction((timeoutCallbackFunction)TimedOut_WithCtx);
   VecSim_SetLogCallbackFunction(VecSimLogCallback);
+
+  // Initialize query cache
+  QueryCacheIntegration_Init(RSGlobalConfig.queryCacheMaxSize);
+  DO_LOG("notice", "Query cache initialized with max size: %zu", RSGlobalConfig.queryCacheMaxSize);
+
   return REDISMODULE_OK;
 }

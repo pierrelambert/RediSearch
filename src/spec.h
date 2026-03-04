@@ -31,6 +31,7 @@
 #include "obfuscation/hidden.h"
 #include "search_disk_api.h"
 #include "rs_wall_clock.h"
+#include "redisearch_rs/headers/bloom_filter.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -49,6 +50,7 @@ struct IndexesScanner;
 #define SPEC_TEXT_STR "TEXT"
 #define SPEC_VECTOR_STR "VECTOR"
 #define SPEC_NUMERIC_STR "NUMERIC"
+#define SPEC_DATETIME_STR "DATETIME"
 
 #define SPEC_NOOFFSETS_STR "NOOFFSETS"
 #define SPEC_NOFIELDS_STR "NOFIELDS"
@@ -309,6 +311,7 @@ typedef struct IndexSpec {
   Trie *suffix;                   // Trie of TEXT suffix tokens of terms. Used for contains queries
   t_fieldMask suffixMask;         // Mask of all fields that support contains query
   dict *keysDict;                 // Inverted indexes dictionary of all TEXT terms
+  struct BloomFilter *termFilter; // Bloom filter for fast term rejection
 
   DocTable docs;                  // Contains metadata of all documents
 
@@ -345,6 +348,9 @@ typedef struct IndexSpec {
 
   // Count the number of times the index was used
   long long counter;
+
+  // Query cache invalidation counter - bumped on any write operation
+  uint64_t revision;
 
   // read write lock
   pthread_rwlock_t rwlock;
@@ -716,6 +722,15 @@ size_t IndexSpec_TotalMemUsage(IndexSpec *sp, size_t doctable_tm_size, size_t ta
 */
 const char *IndexSpec_FormatName(const IndexSpec *sp, bool obfuscate);
 char *IndexSpec_FormatObfuscatedName(const HiddenString *specName);
+
+/**
+ * Atomically increment the index revision counter.
+ * This invalidates all cached query results for this index.
+ * Should be called on any write operation (add, update, delete, schema change).
+ *
+ * @param spec The index specification
+ */
+void IndexSpec_BumpRevision(IndexSpec *spec);
 
 //---------------------------------------------------------------------------------------------
 

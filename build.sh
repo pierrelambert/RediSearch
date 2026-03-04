@@ -573,6 +573,13 @@ run_cmake() {
 #-----------------------------------------------------------------------------
 build_project() {
   # redisearch_rs is now built automatically by CMake
+  # Determine which make to use (prefer gmake if available for GNU Make 4.x features)
+  if command -v gmake &> /dev/null; then
+    MAKE_CMD="gmake"
+  else
+    MAKE_CMD="make"
+  fi
+
   # Determine number of parallel jobs for make
   if command -v nproc &> /dev/null; then
     NPROC=$(nproc)
@@ -581,8 +588,8 @@ build_project() {
   else
     NPROC=4  # Default if we can't determine
   fi
-  echo "Building RediSearch with $NPROC parallel jobs..."
-  make -j "$NPROC"
+  echo "Building RediSearch with $NPROC parallel jobs using $MAKE_CMD..."
+  $MAKE_CMD -j "$NPROC"
 
   # Build test dependencies if needed
   build_test_dependencies
@@ -608,8 +615,8 @@ build_test_dependencies() {
 
       # The example_extension target is created by CMake in the build directory
       # First check if the target exists in this build
-      if grep -q "example_extension" Makefile 2>/dev/null || (make -q example_extension 2>/dev/null); then
-        make example_extension
+      if grep -q "example_extension" Makefile 2>/dev/null || ($MAKE_CMD -q example_extension 2>/dev/null); then
+        $MAKE_CMD example_extension
       else
         # If the target doesn't exist, we need to ensure the test was properly configured
         echo "Warning: 'example_extension' target not found in Makefile"
@@ -621,7 +628,7 @@ build_test_dependencies() {
           echo "Extension binary already exists at: $EXTENSION_PATH"
         else
           echo "Extension binary not found. Some tests may fail."
-          echo "Try running 'make example_extension' manually in $BINDIR"
+          echo "Try running '$MAKE_CMD example_extension' manually in $BINDIR"
         fi
       fi
 
@@ -804,6 +811,36 @@ run_rust_valgrind_tests() {
 }
 
 #-----------------------------------------------------------------------------
+# Function: check_and_kill_redis_on_default_port
+# Check if Redis is running on port 6379 and kill it to avoid conflicts
+#-----------------------------------------------------------------------------
+check_and_kill_redis_on_default_port() {
+  # Check if port 6379 is in use
+  if lsof -i :6379 >/dev/null 2>&1; then
+    echo "Warning: Redis server is running on port 6379"
+    echo "This will conflict with test framework. Attempting to kill it..."
+
+    # Get PIDs using port 6379
+    PIDS=$(lsof -ti :6379 2>/dev/null)
+
+    if [[ -n "$PIDS" ]]; then
+      echo "Killing Redis processes: $PIDS"
+      kill $PIDS 2>/dev/null || true
+      sleep 1
+
+      # Verify port is free
+      if lsof -i :6379 >/dev/null 2>&1; then
+        echo "Error: Failed to free port 6379. Please manually kill Redis servers."
+        echo "Run: lsof -ti :6379 | xargs kill"
+        exit 1
+      else
+        echo "Port 6379 is now free"
+      fi
+    fi
+  fi
+}
+
+#-----------------------------------------------------------------------------
 # Function: run_python_tests
 # Run Python behavioral tests
 #-----------------------------------------------------------------------------
@@ -813,6 +850,9 @@ run_python_tests() {
   fi
 
   echo "Running Python behavioral tests..."
+
+  # Check and kill any Redis servers on port 6379 to avoid conflicts
+  check_and_kill_redis_on_default_port
 
   # Locate the built module
   MODULE_PATH="$BINDIR/redisearch.so"

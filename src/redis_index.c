@@ -149,6 +149,18 @@ void SearchCtx_Free(RedisSearchCtx *sctx) {
 
 static InvertedIndex *openIndexKeysDict(const RedisSearchCtx *ctx, CharBuf *termKey,
                                         bool write, bool *outIsNew) {
+  // Fast path: check Bloom filter for non-existent terms (read-only mode)
+  if (!write && ctx->spec->termFilter) {
+    if (!BloomFilter_Contains(ctx->spec->termFilter, termKey->buf, termKey->len)) {
+      // Term definitely doesn't exist - fast rejection
+      if (outIsNew) {
+        *outIsNew = false;
+      }
+      return NULL;
+    }
+    // Term might exist (or false positive) - continue with normal lookup
+  }
+
   InvertedIndex *idx = dictFetchValue(ctx->spec->keysDict, termKey);
   if (outIsNew) {
     *outIsNew = idx == NULL;

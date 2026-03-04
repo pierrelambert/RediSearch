@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "bloom_filter",
     "buffer",
     "build_utils",
     "c_entrypoint/*",
@@ -40,7 +41,7 @@ members = [
     "varint_bencher",
     "wildcard",
     "workspace_hack",
-    "idf",
+    "idf", "query_cache", "datetime",
 ]
 
 resolver = "3"
@@ -83,6 +84,7 @@ license-file = "../../LICENSE.txt"
 publish = false
 
 [workspace.dependencies]
+bloom_filter = { path = "./bloom_filter" }
 buffer = { path = "./buffer" }
 build_utils = { path = "./build_utils" }
 c_ffi_utils = { path = "./c_entrypoint/c_ffi_utils" }
@@ -96,6 +98,7 @@ hyperloglog = { path = "./hyperloglog" }
 idf = { path = "./idf" }
 inverted_index = { path = "./inverted_index" }
 numeric_range_tree = { path = "./numeric_range_tree" }
+query_cache = { path = "./query_cache" }
 redis_reply = { path = "./redis_reply" }
 qint = { path = "./qint" }
 query_error = { path = "./query_error" }

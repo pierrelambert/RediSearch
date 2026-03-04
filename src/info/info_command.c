@@ -22,6 +22,8 @@
 #include "info/info_redis/threads/current_thread.h"
 #include "obfuscation/obfuscation_api.h"
 #include "query_error.h"
+#include "query_cache_integration.h"
+#include "query_cache.h"
 
 static void renderIndexOptions(RedisModule_Reply *reply, const IndexSpec *sp) {
 
@@ -271,6 +273,16 @@ void fillReplyWithIndexInfo(RedisSearchCtx* sctx, RedisModule_Reply *reply, bool
   REPLY_KVNUM("tag_overhead_sz_mb", tags_overhead / (float)0x100000);
   size_t text_overhead = IndexSpec_collect_text_overhead(sp);
   REPLY_KVNUM("text_overhead_sz_mb", text_overhead / (float)0x100000);
+
+  // Bloom filter stats (report 0 if not yet initialized)
+  size_t bloom_mem = 0;
+  size_t bloom_count = 0;
+  if (sp->termFilter) {
+    bloom_mem = BloomFilter_MemUsage(sp->termFilter);
+    bloom_count = BloomFilter_Count(sp->termFilter);
+  }
+  REPLY_KVNUM("bloom_filter_sz_mb", bloom_mem / (float)0x100000);
+  REPLY_KVINT("bloom_filter_terms", bloom_count);
   REPLY_KVNUM("total_index_memory_sz_mb", IndexSpec_TotalMemUsage(specForOpeningIndexes, dt_tm_size,
     tags_overhead, text_overhead, vector_indexes_size) / (float)0x100000);
   REPLY_KVNUM("geoshapes_sz_mb", geom_idx_sz / (float)0x100000);
@@ -303,6 +315,23 @@ void fillReplyWithIndexInfo(RedisSearchCtx* sctx, RedisModule_Reply *reply, bool
   }
 
   Cursors_RenderStats(&g_CursorsList, &g_CursorsListCoord, sp, reply);
+
+  // Query cache stats - only show if cache is enabled (max_size > 0)
+  if (RSGlobalConfig.queryCacheMaxSize > 0) {
+    QueryCacheStats cache_stats = QueryCacheIntegration_GetStats();
+    RedisModule_ReplyKV_Map(reply, "query_cache_stats");
+    REPLY_KVINT("hits", cache_stats.hits);
+    REPLY_KVINT("misses", cache_stats.misses);
+    double hit_rate = 0.0;
+    if (cache_stats.hits + cache_stats.misses > 0) {
+      hit_rate = (double)cache_stats.hits / (double)(cache_stats.hits + cache_stats.misses);
+    }
+    REPLY_KVNUM("hit_rate", hit_rate);
+    REPLY_KVINT("entries", cache_stats.entries);
+    REPLY_KVINT("memory_bytes", cache_stats.memory_bytes);
+    REPLY_KVINT("evictions", cache_stats.evictions);
+    RedisModule_Reply_MapEnd(reply);
+  }
 
   // Unlock spec
   RedisSearchCtx_UnlockSpec(sctx);

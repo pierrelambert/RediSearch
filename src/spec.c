@@ -511,6 +511,12 @@ char *IndexSpec_FormatObfuscatedName(const HiddenString *specName) {
   return rm_strdup(buffer);
 }
 
+void IndexSpec_BumpRevision(IndexSpec *spec) {
+  if (spec) {
+    __atomic_fetch_add(&spec->revision, 1, __ATOMIC_SEQ_CST);
+  }
+}
+
 static bool checkIfSpecExists(const char *rawSpecName) {
   bool found = false;
   HiddenString* specName = NewHiddenString(rawSpecName, strlen(rawSpecName), false);
@@ -1365,6 +1371,12 @@ static int parseFieldSpec(ArgsCursor *ac, IndexSpec *sp, StrongRef sp_ref, Field
     if (AC_AdvanceIfMatch(ac, SPEC_INDEXMISSING_STR)) {
       fs->options |= FieldSpec_IndexMissing;
     }
+  } else if (AC_AdvanceIfMatch(ac, SPEC_DATETIME_STR)) {  // datetime field
+    if (!SearchDisk_MarkUnsupportedFieldIfDiskEnabled(SPEC_DATETIME_STR, fs, status)) goto error;
+    fs->types |= INDEXFLD_T_DATETIME;
+    if (AC_AdvanceIfMatch(ac, SPEC_INDEXMISSING_STR)) {
+      fs->options |= FieldSpec_IndexMissing;
+    }
   } else {
     QueryError_SetWithUserDataFmt(status, QUERY_ERROR_CODE_PARSE_ARGS, "Invalid field type for field", " `%s`", HiddenString_GetUnsafe(fs->fieldName, NULL));
     goto error;
@@ -1861,6 +1873,14 @@ void IndexSpec_AddTerm(IndexSpec *sp, const char *term, size_t len) {
   if (isNew) {
     sp->stats.scoring.numTerms++;
     sp->stats.termsSize += len;
+    // Lazily initialize Bloom filter on first term insertion
+    // Start with 10K expected items, 1% false positive rate (~10 bits/term)
+    // This provides good balance between memory overhead and false positive rate
+    if (!sp->termFilter) {
+      sp->termFilter = BloomFilter_New(10000, 0.01);
+    }
+    // Add term to Bloom filter for fast negative lookups
+    BloomFilter_Insert(sp->termFilter, term, len);
   }
 }
 
@@ -2003,6 +2023,11 @@ static void IndexSpec_FreeUnlinkedData(IndexSpec *spec) {
   // Free suffix trie
   if (spec->suffix) {
     TrieType_Free(spec->suffix);
+  }
+
+  // Free Bloom filter
+  if (spec->termFilter) {
+    BloomFilter_Free(spec->termFilter);
   }
 
   // Destroy the spec's lock
@@ -2293,6 +2318,9 @@ static void initializeIndexSpec(IndexSpec *sp, const HiddenString *name, IndexFl
 
   sp->fieldIdToIndex = array_new(t_fieldIndex, 0);
   sp->terms = NewTrie(NULL, Trie_Sort_Lex);
+  // Bloom filter will be lazily initialized on first term insertion
+  // to avoid pre-allocating memory for empty indexes
+  sp->termFilter = NULL;
 
   IndexSpec_InitLock(sp);
   // First, initialise fields IndexError for every field
@@ -3759,6 +3787,10 @@ int IndexSpec_UpdateDoc(IndexSpec *spec, RedisModuleCtx *ctx, RedisModuleString 
   spec->stats.totalIndexTime += rs_wall_clock_elapsed_ns(&startDocTime);
   IndexSpec_DecrActiveWrites(spec);
   RedisSearchCtx_UnlockSpec(&sctx);
+
+  // Invalidate query cache on document update
+  IndexSpec_BumpRevision(spec);
+
   return REDISMODULE_OK;
 }
 
@@ -3825,6 +3857,9 @@ int IndexSpec_DeleteDoc(IndexSpec *spec, RedisModuleCtx *ctx, RedisModuleString 
   IndexSpec_DeleteDoc_Unsafe(spec, ctx, key);
   IndexSpec_DecrActiveWrites(spec);
   RedisSearchCtx_UnlockSpec(&sctx);
+
+  // Invalidate query cache on document delete
+  IndexSpec_BumpRevision(spec);
 
   return REDISMODULE_OK;
 }

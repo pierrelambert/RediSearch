@@ -32,7 +32,9 @@ toml.workspace = true
 walkdir.workspace = true
 
 [dependencies]
+bloom_filter_ffi = { path = "../bloom_filter_ffi" }
 buffer = { workspace = true }
+datetime_ffi = { path = "../datetime_ffi" }
 fnv_ffi = { path = "../fnv_ffi" }
 idf_ffi = { path = "../idf_ffi" }
 inverted_index_ffi = { path = "../inverted_index_ffi" }
@@ -46,6 +48,7 @@ triemap_ffi = { path = "../triemap_ffi" }
 types_ffi = { path = "../types_ffi" }
 numeric_range_tree_ffi = { path = "../numeric_range_tree_ffi" }
 varint_ffi = { path = "../varint_ffi" }
+query_cache_ffi = { path = "../query_cache_ffi" }
 workspace_hack.workspace = true
 module_init_ffi = { path = "../module_init_ffi" }
 search_result_ffi = { path = "../search_result_ffi" }

@@ -6,6 +6,7 @@
  * (RSALv2); or (b) the Server Side Public License v1 (SSPLv1); or (c) the
  * GNU Affero General Public License v3 (AGPLv3).
 */
+#include <time.h>
 #include "redismodule.h"
 #include "redisearch.h"
 #include "search_ctx.h"
@@ -32,6 +33,10 @@
 #include "result_processor.h"
 #include "profile/options.h"
 #include "reply_empty.h"
+#include "query_cache_integration.h"
+#include "query_cache_helpers.h"
+#include "config.h"
+#include "spec.h"
 
 // Multi threading data structure
 typedef struct {
@@ -338,11 +343,24 @@ static size_t getResultsFactor(AREQ *req) {
 }
 
 static void startPipeline(AREQ *req, ResultProcessor *rp, SearchResult ***results, SearchResult *r, int *rc) {
+  // Check if we need to aggregate results for caching
+  bool needsAggregation = false;
+  if (RSGlobalConfig.queryCacheEnabled && RSGlobalConfig.queryCacheMaxSize > 0) {
+    QEFlags reqFlags = AREQ_RequestFlags(req);
+    AGGPlan *plan = AREQ_AGGPlan(req);
+    PLN_ArrangeStep *arng = AGPLN_GetArrangeStep(plan);
+    size_t result_limit = arng && arng->isLimited ? arng->limit : DEFAULT_LIMIT;
+    needsAggregation = QueryCache_ShouldCache(reqFlags, result_limit);
+    fprintf(stderr, "[QueryCache] startPipeline: needsAggregation=%d shouldCache=%d limit=%zu\n",
+            needsAggregation, QueryCache_ShouldCache(reqFlags, result_limit), result_limit);
+  }
+
   CommonPipelineCtx ctx = {
     .timeoutPolicy = req->reqConfig.timeoutPolicy,
     .timeout = &req->sctx->time.timeout,
     .oomPolicy = req->reqConfig.oomPolicy,
     .skipTimeoutChecks = req->sctx->time.skipTimeoutChecks,
+    .needsAggregation = needsAggregation,
   };
   startPipelineCommon(&ctx, rp, results, r, rc);
 
@@ -414,6 +432,10 @@ static void sendChunk_Resp2(AREQ *req, RedisModule_Reply *reply, size_t limit,
     SearchResult **results = NULL;
     long nelem = 0, resultsLen = REDISMODULE_POSTPONED_ARRAY_LEN;
     bool cursor_done = false;
+    bool cache_hit = false;
+    // Pre-serialized cache data (must serialize before results are consumed)
+    CachedDocIds *serialized_cache = NULL;
+    size_t serialized_cache_size = 0;
 
     // Check timeout before starting pipeline
     if (AREQ_TimedOut(req)) {
@@ -422,7 +444,53 @@ static void sendChunk_Resp2(AREQ *req, RedisModule_Reply *reply, size_t limit,
       goto done_2_err;
     }
 
-    startPipeline(req, rp, &results, &r, &rc);
+    // Try cache lookup before executing query
+    if (RSGlobalConfig.queryCacheEnabled && RSGlobalConfig.queryCacheMaxSize > 0) {
+      QEFlags reqFlags = AREQ_RequestFlags(req);
+
+      // Get limit and offset from arrange step first
+      AGGPlan *plan = AREQ_AGGPlan(req);
+      PLN_ArrangeStep *arng = AGPLN_GetArrangeStep(plan);
+      size_t result_limit = arng && arng->isLimited ? arng->limit : DEFAULT_LIMIT;
+      size_t result_offset = arng && arng->isLimited ? arng->offset : 0;
+
+      if (QueryCache_ShouldCache(reqFlags, result_limit)) {
+        RedisSearchCtx *sctx = AREQ_SearchCtx(req);
+        if (sctx && sctx->spec) {
+          // Get query parameters
+          const char *index_name = IndexSpec_FormatName(sctx->spec, false);
+          const char *query_string = req->query;
+
+          // TODO: Serialize sort parameters
+          const char *sort_params = NULL;
+
+          uint64_t revision = sctx->spec->revision;
+
+          // Try to get cached results
+          size_t cached_size = 0;
+          const uint8_t *cached_data = QueryCacheIntegration_Lookup(
+            index_name, query_string, result_limit, result_offset,
+            sort_params, revision, &cached_size
+          );
+
+          if (cached_data) {
+            // Cache HIT - deserialize cached doc IDs
+            results = QueryCache_DeserializeDocIds(cached_data, cached_size, &sctx->spec->docs);
+            if (results) {
+              cache_hit = true;
+              rc = RS_RESULT_OK;
+              // Set total results count from cached data
+              qctx->totalResults = array_len(results);
+            }
+          }
+        }
+      }
+    }
+
+    // If cache miss, execute the query normally
+    if (!cache_hit) {
+      startPipeline(req, rp, &results, &r, &rc);
+    }
 
     if (!AREQ_TryClaimReply(req)) {
       // Timeout callback owns reply - skip to cleanup without replying
@@ -477,6 +545,18 @@ static void sendChunk_Resp2(AREQ *req, RedisModule_Reply *reply, size_t limit,
     }
 
     // If the policy is `ON_TIMEOUT FAIL`, we already aggregated the results
+    // Serialize results for caching BEFORE they are consumed by populateReplyWithResults
+    if (results != NULL && !cache_hit && RSGlobalConfig.queryCacheEnabled && RSGlobalConfig.queryCacheMaxSize > 0) {
+      QEFlags reqFlags = AREQ_RequestFlags(req);
+      AGGPlan *plan = AREQ_AGGPlan(req);
+      PLN_ArrangeStep *arng = AGPLN_GetArrangeStep(plan);
+      size_t result_limit = arng && arng->isLimited ? arng->limit : DEFAULT_LIMIT;
+      if (QueryCache_ShouldCache(reqFlags, result_limit)) {
+        size_t num_results = array_len(results);
+        serialized_cache = QueryCache_SerializeDocIds(results, num_results, &serialized_cache_size);
+      }
+    }
+
     if (results != NULL) {
       nelem += populateReplyWithResults(reply, results, req, &cv);
       results = NULL;
@@ -552,6 +632,34 @@ done_2:
     AREQ_MarkReplied(req);
 
 done_2_err:
+    // Store pre-serialized results in cache (serialized before consumption)
+    if (serialized_cache != NULL && (rc == RS_RESULT_OK || rc == RS_RESULT_EOF)) {
+      RedisSearchCtx *sctx = AREQ_SearchCtx(req);
+      if (sctx && sctx->spec) {
+        // Get query parameters
+        const char *index_name = IndexSpec_FormatName(sctx->spec, false);
+        const char *query_string = req->query;
+
+        // Get limit and offset from arrange step
+        AGGPlan *plan = AREQ_AGGPlan(req);
+        PLN_ArrangeStep *arng = AGPLN_GetArrangeStep(plan);
+        size_t result_limit = arng && arng->isLimited ? arng->limit : DEFAULT_LIMIT;
+        size_t result_offset = arng && arng->isLimited ? arng->offset : 0;
+
+        // TODO: Serialize sort parameters
+        const char *sort_params = NULL;
+
+        uint64_t revision = sctx->spec->revision;
+
+        QueryCacheIntegration_Store(
+          index_name, query_string, result_limit, result_offset,
+          sort_params, revision, (const uint8_t *)serialized_cache, serialized_cache_size
+        );
+      }
+      rm_free(serialized_cache);
+      serialized_cache = NULL;
+    }
+
     finishSendChunk(req, results, &r, cursor_done);
 
     if (resultsLen != REDISMODULE_POSTPONED_ARRAY_LEN && rc == RS_RESULT_OK && resultsLen != nelem) {
@@ -609,6 +717,10 @@ static void sendChunk_Resp3(AREQ *req, RedisModule_Reply *reply, size_t limit,
     ResultProcessor *rp = qctx->endProc;
     SearchResult **results = NULL;
     bool cursor_done = false;
+    bool cache_hit = false;
+    // Pre-serialized cache data (must serialize before results are consumed)
+    CachedDocIds *serialized_cache = NULL;
+    size_t serialized_cache_size = 0;
 
     // Check timeout before starting pipeline
     if (AREQ_TimedOut(req)) {
@@ -617,7 +729,52 @@ static void sendChunk_Resp3(AREQ *req, RedisModule_Reply *reply, size_t limit,
       goto done_3_err;
     }
 
-    startPipeline(req, rp, &results, &r, &rc);
+    // Try cache lookup before executing query
+    if (RSGlobalConfig.queryCacheEnabled && RSGlobalConfig.queryCacheMaxSize > 0) {
+      QEFlags reqFlags = AREQ_RequestFlags(req);
+
+      // Get limit and offset from arrange step first
+      AGGPlan *plan = AREQ_AGGPlan(req);
+      PLN_ArrangeStep *arng = AGPLN_GetArrangeStep(plan);
+      size_t result_limit = arng && arng->isLimited ? arng->limit : DEFAULT_LIMIT;
+      size_t result_offset = arng && arng->isLimited ? arng->offset : 0;
+
+      if (QueryCache_ShouldCache(reqFlags, result_limit)) {
+        if (sctx && sctx->spec) {
+          // Get query parameters
+          const char *index_name = IndexSpec_FormatName(sctx->spec, false);
+          const char *query_string = req->query;
+
+          // TODO: Serialize sort parameters
+          const char *sort_params = NULL;
+
+          uint64_t revision = sctx->spec->revision;
+
+          // Try to get cached results
+          size_t cached_size = 0;
+          const uint8_t *cached_data = QueryCacheIntegration_Lookup(
+            index_name, query_string, result_limit, result_offset,
+            sort_params, revision, &cached_size
+          );
+
+          if (cached_data) {
+            // Cache HIT - deserialize cached doc IDs
+            results = QueryCache_DeserializeDocIds(cached_data, cached_size, &sctx->spec->docs);
+            if (results) {
+              cache_hit = true;
+              rc = RS_RESULT_OK;
+              // Set total results count from cached data
+              qctx->totalResults = array_len(results);
+            }
+          }
+        }
+      }
+    }
+
+    // If cache miss, execute the query normally
+    if (!cache_hit) {
+      startPipeline(req, rp, &results, &r, &rc);
+    }
 
     if (!AREQ_TryClaimReply(req)) {
       // Timeout callback owns reply - skip to cleanup without replying
@@ -671,6 +828,18 @@ static void sendChunk_Resp3(AREQ *req, RedisModule_Reply *reply, size_t limit,
 
     if (AREQ_RequestFlags(req) & QEXEC_F_NOROWS || (rc != RS_RESULT_OK && rc != RS_RESULT_EOF)) {
       goto done_3;
+    }
+
+    // Serialize results for caching BEFORE they are consumed by populateReplyWithResults
+    if (results != NULL && !cache_hit && RSGlobalConfig.queryCacheEnabled && RSGlobalConfig.queryCacheMaxSize > 0) {
+      QEFlags reqFlags = AREQ_RequestFlags(req);
+      AGGPlan *plan = AREQ_AGGPlan(req);
+      PLN_ArrangeStep *arng = AGPLN_GetArrangeStep(plan);
+      size_t result_limit = arng && arng->isLimited ? arng->limit : DEFAULT_LIMIT;
+      if (QueryCache_ShouldCache(reqFlags, result_limit)) {
+        size_t num_results = array_len(results);
+        serialized_cache = QueryCache_SerializeDocIds(results, num_results, &serialized_cache_size);
+      }
     }
 
     if (results != NULL) {
@@ -735,6 +904,33 @@ done_3:
     AREQ_MarkReplied(req);
 
 done_3_err:
+    // Store pre-serialized results in cache (serialized before consumption)
+    if (serialized_cache != NULL && (rc == RS_RESULT_OK || rc == RS_RESULT_EOF)) {
+      if (sctx && sctx->spec) {
+        // Get query parameters
+        const char *index_name = IndexSpec_FormatName(sctx->spec, false);
+        const char *query_string = req->query;
+
+        // Get limit and offset from arrange step
+        AGGPlan *plan = AREQ_AGGPlan(req);
+        PLN_ArrangeStep *arng = AGPLN_GetArrangeStep(plan);
+        size_t result_limit = arng && arng->isLimited ? arng->limit : DEFAULT_LIMIT;
+        size_t result_offset = arng && arng->isLimited ? arng->offset : 0;
+
+        // TODO: Serialize sort parameters
+        const char *sort_params = NULL;
+
+        uint64_t revision = sctx->spec->revision;
+
+        QueryCacheIntegration_Store(
+          index_name, query_string, result_limit, result_offset,
+          sort_params, revision, (const uint8_t *)serialized_cache, serialized_cache_size
+        );
+      }
+      rm_free(serialized_cache);
+      serialized_cache = NULL;
+    }
+
     finishSendChunk(req, results, &r, cursor_done);
 }
 
@@ -761,10 +957,54 @@ void sendChunk(AREQ *req, RedisModule_Reply *reply, size_t limit) {
   QueryProcessingCtx *qctx = AREQ_QueryProcessingCtx(req);
   qctx->resultLimit = limit;
 
+  // Track timing for adaptive chunk sizing
+  struct timespec start_time, end_time;
+  bool is_adaptive = (reqFlags & QEXEC_F_IS_CURSOR) && req->cursorConfig.adaptive;
+  if (is_adaptive) {
+    clock_gettime(CLOCK_MONOTONIC, &start_time);
+  }
+
   if (reply->resp3) {
     sendChunk_Resp3(req, reply, limit, cv);
   } else {
     sendChunk_Resp2(req, reply, limit, cv);
+  }
+
+  // Adjust chunk size for next read if adaptive mode is enabled
+  if (is_adaptive && !(req->stateflags & QEXEC_S_ITERDONE)) {
+    clock_gettime(CLOCK_MONOTONIC, &end_time);
+
+    // Calculate elapsed time in milliseconds
+    uint64_t elapsed_ns = (end_time.tv_sec - start_time.tv_sec) * 1000000000ULL +
+                          (end_time.tv_nsec - start_time.tv_nsec);
+    uint32_t elapsed_ms = (uint32_t)(elapsed_ns / 1000000);
+
+    uint32_t target_ms = req->cursorConfig.targetMs;
+    uint32_t current_chunk = req->cursorConfig.chunkSize;
+
+    // Adjust chunk size to target the desired execution time
+    // If we're too slow, reduce chunk size; if too fast, increase it
+    if (elapsed_ms > target_ms && current_chunk > 1) {
+      // Too slow - reduce chunk size proportionally
+      uint32_t new_chunk = (uint32_t)((uint64_t)current_chunk * target_ms / elapsed_ms);
+      // Don't reduce by more than 50% at a time for stability
+      if (new_chunk < current_chunk / 2) {
+        new_chunk = current_chunk / 2;
+      }
+      if (new_chunk < 1) {
+        new_chunk = 1;
+      }
+      req->cursorConfig.chunkSize = new_chunk;
+    } else if (elapsed_ms < target_ms / 2) {
+      // Too fast - increase chunk size proportionally
+      uint32_t new_chunk = (uint32_t)((uint64_t)current_chunk * target_ms / elapsed_ms);
+      // Don't increase by more than 2x at a time for stability
+      if (new_chunk > current_chunk * 2) {
+        new_chunk = current_chunk * 2;
+      }
+      req->cursorConfig.chunkSize = new_chunk;
+    }
+    // If elapsed_ms is between target_ms/2 and target_ms, keep current chunk size
   }
 
   if (sctx->spec) {
