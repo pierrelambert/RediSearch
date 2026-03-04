@@ -83,6 +83,49 @@ static inline void AREQ_GetReturnFieldNames(const AREQ *req, const char ***out_f
 }
 
 /**
+ * Helper to serialize SORTBY parameters from an AREQ for cache key generation.
+ * Produces a string like "field1:ASC,field2:DESC" that can be hashed.
+ * Returns NULL if no SORTBY is specified.
+ * Caller must NOT free the returned string (uses thread-local buffer).
+ */
+static inline const char *AREQ_GetSortParams(const AREQ *req) {
+  AGGPlan *plan = AREQ_AGGPlan((AREQ *)req);
+  PLN_ArrangeStep *arng = AGPLN_GetArrangeStep(plan);
+  if (!arng || !arng->sortKeys || array_len(arng->sortKeys) == 0) {
+    return NULL;
+  }
+
+  // Thread-local buffer for sort params string
+  static __thread char sort_params_buf[1024];
+  char *p = sort_params_buf;
+  char *end = sort_params_buf + sizeof(sort_params_buf) - 1;
+
+  size_t numKeys = array_len(arng->sortKeys);
+  for (size_t i = 0; i < numKeys && p < end; i++) {
+    if (i > 0 && p < end) {
+      *p++ = ',';
+    }
+    // Copy field name
+    const char *field = arng->sortKeys[i];
+    while (*field && p < end) {
+      *p++ = *field++;
+    }
+    // Add direction
+    if (p < end) {
+      *p++ = ':';
+    }
+    // Check ASC/DESC using the bitmap (bit set = ASC, bit clear = DESC)
+    const char *dir = SORTASCMAP_GETASC(arng->sortAscMap, i) ? "ASC" : "DESC";
+    while (*dir && p < end) {
+      *p++ = *dir++;
+    }
+  }
+  *p = '\0';
+
+  return sort_params_buf;
+}
+
+/**
  * Get the sorting key of the result. This will be the sorting key of the last
  * RLookup registry. Returns NULL if there is no sorting key
  */
@@ -484,8 +527,8 @@ static void sendChunk_Resp2(AREQ *req, RedisModule_Reply *reply, size_t limit,
           const char *index_name = IndexSpec_FormatName(sctx->spec, false);
           const char *query_string = req->query;
 
-          // TODO: Serialize sort parameters
-          const char *sort_params = NULL;
+          // Get SORTBY parameters for cache key differentiation (includes direction)
+          const char *sort_params = AREQ_GetSortParams(req);
 
           // Get RETURN fields for cache key differentiation
           const char **return_fields = NULL;
@@ -675,8 +718,8 @@ done_2_err:
         size_t result_limit = arng && arng->isLimited ? arng->limit : DEFAULT_LIMIT;
         size_t result_offset = arng && arng->isLimited ? arng->offset : 0;
 
-        // TODO: Serialize sort parameters
-        const char *sort_params = NULL;
+        // Get SORTBY parameters for cache key differentiation (includes direction)
+        const char *sort_params = AREQ_GetSortParams(req);
 
         // Get RETURN fields for cache key differentiation
         const char **return_fields = NULL;
@@ -780,8 +823,8 @@ static void sendChunk_Resp3(AREQ *req, RedisModule_Reply *reply, size_t limit,
           const char *index_name = IndexSpec_FormatName(sctx->spec, false);
           const char *query_string = req->query;
 
-          // TODO: Serialize sort parameters
-          const char *sort_params = NULL;
+          // Get SORTBY parameters for cache key differentiation (includes direction)
+          const char *sort_params = AREQ_GetSortParams(req);
 
           // Get RETURN fields for cache key differentiation
           const char **return_fields = NULL;
@@ -958,8 +1001,8 @@ done_3_err:
         size_t result_limit = arng && arng->isLimited ? arng->limit : DEFAULT_LIMIT;
         size_t result_offset = arng && arng->isLimited ? arng->offset : 0;
 
-        // TODO: Serialize sort parameters
-        const char *sort_params = NULL;
+        // Get SORTBY parameters for cache key differentiation (includes direction)
+        const char *sort_params = AREQ_GetSortParams(req);
 
         // Get RETURN fields for cache key differentiation
         const char **return_fields = NULL;
