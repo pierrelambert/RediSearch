@@ -60,8 +60,6 @@ redis-cli HSET prod7 name "Phone Case" brand "PhoneGuard" price 25 stock 1000 ra
 # redis-cli HSET prod1 embedding "\x00\x00\x80\x3f..." (binary float32 data)
 ```
 
----
-
 ## SQL Query Examples
 
 ### Phase 1: Basic Queries
@@ -169,8 +167,6 @@ redis-cli FT.SQL "SELECT * FROM products LIMIT 3 OFFSET 2"
 redis-cli FT.SQL "SELECT name, price FROM products WHERE price > 50 ORDER BY price DESC LIMIT 5"
 ```
 
----
-
 ### Phase 2: Advanced WHERE Operators
 
 #### 11. IN / NOT IN
@@ -217,8 +213,7 @@ redis-cli FT.SQL "SELECT * FROM products WHERE category IS NOT NULL"
 redis-cli FT.AGGREGATE products "*" FILTER "ismissing(@category)"
 ```
 
-> **Note**: IS NULL only works on fields defined with the `INDEXMISSING` attribute.
-> See the [Limitations](#limitations) section for details.
+> Note: IS NULL only works on fields defined with the INDEXMISSING attribute.See the Limitations section for details.
 
 #### 14. AND / OR / NOT
 
@@ -240,8 +235,6 @@ redis-cli FT.SEARCH products "(@category:{electronics} @price:[(100 +inf])"
 redis-cli FT.SEARCH products "(@category:{electronics}) | (@category:{accessories})"
 ```
 
----
-
 ### Phase 2: SELECT DISTINCT
 
 #### 15. DISTINCT Values
@@ -253,8 +246,6 @@ redis-cli FT.SQL "SELECT DISTINCT category FROM products"
 # SQL - Multiple distinct fields
 redis-cli FT.SQL "SELECT DISTINCT category, brand FROM products"
 ```
-
----
 
 ### Phase 2: Aggregation Functions
 
@@ -382,8 +373,6 @@ redis-cli FT.SQL "SELECT HLL_SUM(hll_field) FROM shards"
 redis-cli FT.AGGREGATE shards "*" GROUPBY 0 REDUCE HLL_SUM 1 @hll_field AS merged_hll
 ```
 
----
-
 ### Phase 2: GROUP BY
 
 #### 26. Simple GROUP BY
@@ -422,8 +411,6 @@ redis-cli FT.AGGREGATE products "*" GROUPBY 1 @category \
   REDUCE MAX 1 @rating AS max_rating
 ```
 
----
-
 ### Phase 2: HAVING
 
 #### 29. HAVING with COUNT
@@ -455,8 +442,6 @@ redis-cli FT.AGGREGATE products "*" GROUPBY 1 @category REDUCE AVG 1 @price AS a
 # SQL - Complex HAVING
 redis-cli FT.SQL "SELECT category, COUNT(*) AS cnt, AVG(price) AS avg_price FROM products GROUP BY category HAVING COUNT(*) >= 2 AND AVG(price) < 500"
 ```
-
----
 
 ### Phase 2: Vector Similarity Search
 
@@ -500,8 +485,6 @@ redis-cli FT.SQL "SELECT * FROM products WHERE category = 'electronics' AND pric
 redis-cli FT.SQL "SELECT * FROM products WHERE description LIKE '%laptop%' ORDER BY embedding <-> '[0.1, 0.2]' LIMIT 10 OPTION(vector_weight=0.7, text_weight=0.3)"
 ```
 
----
-
 ### Phase 2: Multiple ORDER BY (FT.AGGREGATE only)
 
 #### 36. Multi-Column Sorting
@@ -514,9 +497,7 @@ redis-cli FT.SQL "SELECT * FROM products ORDER BY category ASC, price DESC"
 redis-cli FT.AGGREGATE products "*" SORTBY 4 @category ASC @price DESC
 ```
 
-> **Note**: Multiple ORDER BY columns require FT.AGGREGATE. FT.SEARCH only supports single-column sorting.
-
----
+> Note: Multiple ORDER BY columns require FT.AGGREGATE. FT.SEARCH only supports single-column sorting.
 
 ## Translation Reference
 
@@ -524,84 +505,82 @@ redis-cli FT.AGGREGATE products "*" SORTBY 4 @category ASC @price DESC
 
 | SQL | RQL Equivalent |
 | --- | --- |
-| `SELECT *` | (no RETURN clause) |
-| `SELECT field1, field2` | `RETURN 2 field1 field2` |
-| `SELECT field AS alias` | `RETURN 1 field AS alias` |
-| `SELECT DISTINCT field` | `GROUPBY 1 @field` |
+| SELECT * | (no RETURN clause) |
+| SELECT field1, field2 | RETURN 2 field1 field2 |
+| SELECT field AS alias | RETURN 1 field AS alias |
+| SELECT DISTINCT field | GROUPBY 1 @field |
 
 ### WHERE Operators
 
 | SQL | RQL Equivalent |
 | --- | --- |
-| `WHERE field = 'value'` | `@field:{value}` (TAG) or `@field:value` (TEXT) |
-| `WHERE field != 'value'` | `-@field:{value}` |
-| `WHERE field > 100` | `@field:[(100 +inf]` |
-| `WHERE field >= 100` | `@field:[100 +inf]` |
-| `WHERE field < 100` | `@field:[-inf (100]` |
-| `WHERE field <= 100` | `@field:[-inf 100]` |
-| `WHERE field BETWEEN a AND b` | `@field:[a b]` |
-| `WHERE field IN ('a', 'b')` | `@field:{a\|b}` |
-| `WHERE field NOT IN ('a', 'b')` | `-@field:{a\|b}` |
-| `WHERE field LIKE 'Lap%'` | `@field:Lap*` |
-| `WHERE field LIKE '%end'` | `@field:*end` |
-| `WHERE field LIKE '%mid%'` | `@field:*mid*` |
-| `WHERE field IS NULL` | `FILTER "ismissing(@field)"` |
-| `WHERE field IS NOT NULL` | `FILTER "!ismissing(@field)"` |
+| WHERE field = 'value' | @field:{value} (TAG) or @field:value (TEXT) |
+| WHERE field != 'value' | -@field:{value} |
+| WHERE field > 100 | @field:[(100 +inf] |
+| WHERE field >= 100 | @field:[100 +inf] |
+| WHERE field < 100 | @field:[-inf (100] |
+| WHERE field <= 100 | @field:[-inf 100] |
+| WHERE field BETWEEN a AND b | @field:[a b] |
+| WHERE field IN ('a', 'b') | @field:{a |
+| WHERE field NOT IN ('a', 'b') | -@field:{a |
+| WHERE field LIKE 'Lap%' | @field:Lap* |
+| WHERE field LIKE '%end' | @field:*end |
+| WHERE field LIKE '%mid%' | @field:mid |
+| WHERE field IS NULL | FILTER "ismissing(@field)" |
+| WHERE field IS NOT NULL | FILTER "!ismissing(@field)" |
 
 ### Boolean Operators
 
 | SQL | RQL Equivalent |
 | --- | --- |
-| `WHERE a AND b` | `(a b)` |
-| `WHERE a OR b` | `(a) \| (b)` |
-| `WHERE NOT (a)` | `-(a)` |
+| WHERE a AND b | (a b) |
+| WHERE a OR b | (a) |
+| WHERE NOT (a) | -(a) |
 
 ### Sorting and Pagination
 
 | SQL | RQL Equivalent |
 | --- | --- |
-| `ORDER BY field ASC` | `SORTBY field ASC` |
-| `ORDER BY field DESC` | `SORTBY field DESC` |
-| `ORDER BY a ASC, b DESC` | `SORTBY 4 @a ASC @b DESC` (FT.AGGREGATE only) |
-| `LIMIT n` | `LIMIT 0 n` |
-| `LIMIT n OFFSET m` | `LIMIT m n` |
+| ORDER BY field ASC | SORTBY field ASC |
+| ORDER BY field DESC | SORTBY field DESC |
+| ORDER BY a ASC, b DESC | SORTBY 4 @a ASC @b DESC (FT.AGGREGATE only) |
+| LIMIT n | LIMIT 0 n |
+| LIMIT n OFFSET m | LIMIT m n |
 
 ### Aggregation Functions
 
 | SQL | RQL Equivalent |
 | --- | --- |
-| `COUNT(*)` | `REDUCE COUNT 0` |
-| `SUM(field)` | `REDUCE SUM 1 @field` |
-| `AVG(field)` | `REDUCE AVG 1 @field` |
-| `MIN(field)` | `REDUCE MIN 1 @field` |
-| `MAX(field)` | `REDUCE MAX 1 @field` |
-| `COUNT_DISTINCT(field)` | `REDUCE COUNT_DISTINCT 1 @field` |
-| `COUNT_DISTINCTISH(field)` | `REDUCE COUNT_DISTINCTISH 1 @field` |
-| `STDDEV(field)` | `REDUCE STDDEV 1 @field` |
-| `QUANTILE(field, 0.99)` | `REDUCE QUANTILE 2 @field 0.99` |
-| `TOLIST(field)` | `REDUCE TOLIST 1 @field` |
-| `FIRST_VALUE(f1, f2)` | `REDUCE FIRST_VALUE 2 @f1 @f2` |
-| `RANDOM_SAMPLE(field, n)` | `REDUCE RANDOM_SAMPLE 2 @field n` |
-| `HLL(field)` | `REDUCE HLL 1 @field` |
-| `HLL_SUM(field)` | `REDUCE HLL_SUM 1 @field` |
+| COUNT(*) | REDUCE COUNT 0 |
+| SUM(field) | REDUCE SUM 1 @field |
+| AVG(field) | REDUCE AVG 1 @field |
+| MIN(field) | REDUCE MIN 1 @field |
+| MAX(field) | REDUCE MAX 1 @field |
+| COUNT_DISTINCT(field) | REDUCE COUNT_DISTINCT 1 @field |
+| COUNT_DISTINCTISH(field) | REDUCE COUNT_DISTINCTISH 1 @field |
+| STDDEV(field) | REDUCE STDDEV 1 @field |
+| QUANTILE(field, 0.99) | REDUCE QUANTILE 2 @field 0.99 |
+| TOLIST(field) | REDUCE TOLIST 1 @field |
+| FIRST_VALUE(f1, f2) | REDUCE FIRST_VALUE 2 @f1 @f2 |
+| RANDOM_SAMPLE(field, n) | REDUCE RANDOM_SAMPLE 2 @field n |
+| HLL(field) | REDUCE HLL 1 @field |
+| HLL_SUM(field) | REDUCE HLL_SUM 1 @field |
 
 ### Grouping
 
 | SQL | RQL Equivalent |
 | --- | --- |
-| `GROUP BY field` | `GROUPBY 1 @field` |
-| `GROUP BY a, b` | `GROUPBY 2 @a @b` |
-| `HAVING condition` | `FILTER "condition"` (after GROUPBY) |
+| GROUP BY field | GROUPBY 1 @field |
+| GROUP BY a, b | GROUPBY 2 @a @b |
+| HAVING condition | FILTER "condition" (after GROUPBY) |
 
 ### Vector Search
 
 | SQL Operator | Distance Metric | RQL |
 | --- | --- | --- |
-| `<->` | L2 (Euclidean) | `*=>[KNN n @field $vec]` |
-| `<=>` | Cosine | `*=>[KNN n @field $vec]` |
-| `<#>` | Inner Product | `*=>[KNN n @field $vec]` |
-
----
+| <-> | L2 (Euclidean) | *=>[KNN n @field $vec] |
+| <=> | Cosine | *=>[KNN n @field $vec] |
+| <#> | Inner Product | *=>[KNN n @field $vec] |
 
 ## Limitations
 
@@ -675,8 +654,6 @@ redis-cli FT.SQL "SELECT * FROM products WHERE price > (SELECT AVG(price) FROM p
 redis-cli FT.SQL "SELECT * FROM products p JOIN categories c ON p.category = c.id"
 ```
 
----
-
 ## Error Handling
 
 ### Invalid SQL Syntax
@@ -707,16 +684,12 @@ redis-cli FT.SQL "SELECT * FROM products JOIN other ON products.id = other.pid"
 # Error: JOIN not supported
 ```
 
----
-
 ## Cleanup
 
 ```bash
 redis-cli FT.DROPINDEX products DD
 redis-cli SHUTDOWN NOSAVE
 ```
-
----
 
 ## Quick Reference Card
 
