@@ -698,12 +698,11 @@ mod tests {
     // NOT operator tests
     #[test]
     fn test_translate_not_equals() {
-        let query = SelectQuery::new("idx").with_condition(Condition::Not(Box::new(
-            Condition::Equals {
+        let query =
+            SelectQuery::new("idx").with_condition(Condition::Not(Box::new(Condition::Equals {
                 field: "category".to_string(),
                 value: Value::String("electronics".to_string()),
-            },
-        )));
+            })));
         let result = translate(query).unwrap();
         assert_eq!(result.query_string, "-(@category:{electronics})");
     }
@@ -722,13 +721,12 @@ mod tests {
 
     #[test]
     fn test_translate_not_like() {
-        let query = SelectQuery::new("idx").with_condition(Condition::Not(Box::new(
-            Condition::Like {
+        let query =
+            SelectQuery::new("idx").with_condition(Condition::Not(Box::new(Condition::Like {
                 field: "name".to_string(),
                 pattern: "Lap%".to_string(),
                 negated: false,
-            },
-        )));
+            })));
         let result = translate(query).unwrap();
         assert_eq!(result.query_string, "-(@name:Lap*)");
     }

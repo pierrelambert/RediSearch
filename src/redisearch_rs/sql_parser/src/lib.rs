@@ -670,4 +670,80 @@ mod tests {
         assert!(result.arguments.contains(&"10".to_string())); // offset
         assert!(result.arguments.contains(&"20".to_string())); // count
     }
+
+    // NOT operator integration tests
+    #[test]
+    fn test_not_equals_integration() {
+        let result = translate("SELECT * FROM idx WHERE NOT (category = 'electronics')").unwrap();
+        assert_eq!(result.query_string, "-(@category:{electronics})");
+    }
+
+    #[test]
+    fn test_not_greater_than_integration() {
+        let result = translate("SELECT * FROM idx WHERE NOT (price > 100)").unwrap();
+        assert_eq!(result.query_string, "-(@price:[(100 +inf])");
+    }
+
+    #[test]
+    fn test_not_like_integration() {
+        let result = translate("SELECT * FROM idx WHERE NOT (name LIKE 'Lap%')").unwrap();
+        assert_eq!(result.query_string, "-(@name:Lap*)");
+    }
+
+    #[test]
+    fn test_not_combined_with_and() {
+        let result =
+            translate("SELECT * FROM idx WHERE NOT (category = 'electronics') AND price > 50")
+                .unwrap();
+        assert_eq!(
+            result.query_string,
+            "-(@category:{electronics}) @price:[(50 +inf]"
+        );
+    }
+
+    // Multiple ORDER BY integration tests
+    #[test]
+    fn test_order_by_multiple_columns_integration() {
+        let result = translate("SELECT * FROM products ORDER BY category ASC, price DESC").unwrap();
+        assert_eq!(result.command, Command::Search);
+        // SORTBY category ASC price DESC
+        let args = result.arguments;
+        assert!(args.contains(&"SORTBY".to_string()));
+        // Check order: SORTBY category ASC price DESC
+        let sortby_idx = args.iter().position(|x| x == "SORTBY").unwrap();
+        assert_eq!(args[sortby_idx + 1], "category");
+        assert_eq!(args[sortby_idx + 2], "ASC");
+        assert_eq!(args[sortby_idx + 3], "price");
+        assert_eq!(args[sortby_idx + 4], "DESC");
+    }
+
+    #[test]
+    fn test_order_by_three_columns_integration() {
+        let result =
+            translate("SELECT * FROM idx ORDER BY category ASC, price DESC, name ASC").unwrap();
+        let args = result.arguments;
+        let sortby_idx = args.iter().position(|x| x == "SORTBY").unwrap();
+        assert_eq!(args[sortby_idx + 1], "category");
+        assert_eq!(args[sortby_idx + 2], "ASC");
+        assert_eq!(args[sortby_idx + 3], "price");
+        assert_eq!(args[sortby_idx + 4], "DESC");
+        assert_eq!(args[sortby_idx + 5], "name");
+        assert_eq!(args[sortby_idx + 6], "ASC");
+    }
+
+    #[test]
+    fn test_order_by_with_where_and_limit() {
+        let result = translate(
+            "SELECT * FROM products WHERE status = 'active' ORDER BY price DESC, name ASC LIMIT 10",
+        )
+        .unwrap();
+        assert_eq!(result.query_string, "@status:{active}");
+        let args = result.arguments;
+        let sortby_idx = args.iter().position(|x| x == "SORTBY").unwrap();
+        assert_eq!(args[sortby_idx + 1], "price");
+        assert_eq!(args[sortby_idx + 2], "DESC");
+        assert_eq!(args[sortby_idx + 3], "name");
+        assert_eq!(args[sortby_idx + 4], "ASC");
+        assert!(args.contains(&"LIMIT".to_string()));
+    }
 }

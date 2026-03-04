@@ -1103,8 +1103,7 @@ mod tests {
 
     #[test]
     fn test_parse_order_by_three_columns() {
-        let query =
-            parse("SELECT * FROM idx ORDER BY category ASC, price DESC, name ASC").unwrap();
+        let query = parse("SELECT * FROM idx ORDER BY category ASC, price DESC, name ASC").unwrap();
         let order_by = query.order_by.unwrap();
         assert_eq!(order_by.columns.len(), 3);
         assert_eq!(order_by.columns[0].field, "category");
@@ -1639,10 +1638,12 @@ mod tests {
     #[test]
     fn test_parse_not_with_and() {
         let query =
-            parse("SELECT * FROM idx WHERE NOT (category = 'electronics') AND price > 50")
-                .unwrap();
+            parse("SELECT * FROM idx WHERE NOT (category = 'electronics') AND price > 50").unwrap();
         assert_eq!(query.conditions.len(), 2);
         assert!(matches!(&query.conditions[0], Condition::Not(_)));
-        assert!(matches!(&query.conditions[1], Condition::GreaterThan { .. }));
+        assert!(matches!(
+            &query.conditions[1],
+            Condition::GreaterThan { .. }
+        ));
     }
 }
