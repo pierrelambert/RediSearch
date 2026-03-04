@@ -46,12 +46,6 @@ pub enum Condition {
         low: Value,
         high: Value,
     },
-    /// In: field IN (value1, value2, ...)
-    In {
-        field: String,
-        values: Vec<Value>,
-        negated: bool,
-    },
 }
 
 impl Condition {
@@ -63,8 +57,7 @@ impl Condition {
             | Self::GreaterThanOrEqual { field, .. }
             | Self::LessThan { field, .. }
             | Self::LessThanOrEqual { field, .. }
-            | Self::Between { field, .. }
-            | Self::In { field, .. } => field,
+            | Self::Between { field, .. } => field,
         }
     }
 }
@@ -189,19 +182,6 @@ mod tests {
             high: Value::Number(100.0),
         };
         assert_eq!(cond.field(), "price");
-    }
-
-    #[test]
-    fn test_condition_field_in() {
-        let cond = Condition::In {
-            field: "category".to_string(),
-            values: vec![
-                Value::String("a".to_string()),
-                Value::String("b".to_string()),
-            ],
-            negated: false,
-        };
-        assert_eq!(cond.field(), "category");
     }
 
     // Value::to_rql_string() tests
