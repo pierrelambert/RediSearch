@@ -194,6 +194,12 @@ fn translate_condition(condition: &Condition) -> Result<String, SqlError> {
                 Ok(format!("ismissing(@{field})"))
             }
         }
+        Condition::And(left, right) => {
+            // AND conditions in RQL are implicit (space-separated) with parenthesized sub-conditions
+            let left_str = translate_condition(left)?;
+            let right_str = translate_condition(right)?;
+            Ok(format!("({left_str}) ({right_str})"))
+        }
         Condition::Or(left, right) => {
             // OR conditions in RQL use | operator with spaces between parenthesized sub-conditions
             let left_str = translate_condition(left)?;
@@ -519,6 +525,18 @@ fn translate_having_condition(
             let resolved_field = resolve_having_field(field, aggregates);
             let val_str = value.to_rql_string();
             Ok(format!("@{resolved_field}<={val_str}"))
+        }
+        Condition::And(left, right) => {
+            // AND in FILTER expressions uses &&
+            let left_str = translate_having_condition(left, aggregates)?;
+            let right_str = translate_having_condition(right, aggregates)?;
+            Ok(format!("({left_str} && {right_str})"))
+        }
+        Condition::Or(left, right) => {
+            // OR in FILTER expressions uses ||
+            let left_str = translate_having_condition(left, aggregates)?;
+            let right_str = translate_having_condition(right, aggregates)?;
+            Ok(format!("({left_str} || {right_str})"))
         }
         _ => Err(SqlError::unsupported(
             "Complex HAVING conditions are not supported",

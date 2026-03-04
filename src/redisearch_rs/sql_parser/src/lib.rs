@@ -489,6 +489,133 @@ mod tests {
         );
     }
 
+    #[test]
+    fn test_having_with_greater_than_or_equal() {
+        // Test HAVING with >= operator
+        let result = translate(
+            "SELECT category, COUNT(*) as cnt FROM idx GROUP BY category HAVING COUNT(*) >= 5",
+        )
+        .unwrap();
+
+        assert_eq!(result.command, Command::Aggregate);
+        let filter_idx = result
+            .arguments
+            .iter()
+            .position(|a| a == "FILTER")
+            .expect("FILTER should be present");
+        let filter_expr = &result.arguments[filter_idx + 1];
+        assert_eq!(
+            filter_expr, "@cnt>=5",
+            "HAVING should support >= operator"
+        );
+    }
+
+    #[test]
+    fn test_having_with_less_than() {
+        // Test HAVING with < operator
+        let result = translate(
+            "SELECT category, AVG(price) as avg_price FROM idx GROUP BY category HAVING AVG(price) < 100",
+        )
+        .unwrap();
+
+        assert_eq!(result.command, Command::Aggregate);
+        let filter_idx = result
+            .arguments
+            .iter()
+            .position(|a| a == "FILTER")
+            .expect("FILTER should be present");
+        let filter_expr = &result.arguments[filter_idx + 1];
+        assert_eq!(
+            filter_expr, "@avg_price<100",
+            "HAVING should support < operator"
+        );
+    }
+
+    #[test]
+    fn test_having_with_less_than_or_equal() {
+        // Test HAVING with <= operator
+        let result = translate(
+            "SELECT category, AVG(price) as avg_price FROM idx GROUP BY category HAVING AVG(price) <= 50",
+        )
+        .unwrap();
+
+        assert_eq!(result.command, Command::Aggregate);
+        let filter_idx = result
+            .arguments
+            .iter()
+            .position(|a| a == "FILTER")
+            .expect("FILTER should be present");
+        let filter_expr = &result.arguments[filter_idx + 1];
+        assert_eq!(
+            filter_expr, "@avg_price<=50",
+            "HAVING should support <= operator"
+        );
+    }
+
+    #[test]
+    fn test_having_with_and_condition() {
+        // Test HAVING with AND condition
+        let result = translate(
+            "SELECT category, COUNT(*) as cnt, AVG(price) as avg_price FROM idx GROUP BY category HAVING COUNT(*) >= 2 AND AVG(price) < 500",
+        )
+        .unwrap();
+
+        assert_eq!(result.command, Command::Aggregate);
+        let filter_idx = result
+            .arguments
+            .iter()
+            .position(|a| a == "FILTER")
+            .expect("FILTER should be present");
+        let filter_expr = &result.arguments[filter_idx + 1];
+        assert_eq!(
+            filter_expr, "(@cnt>=2 && @avg_price<500)",
+            "HAVING should support AND conditions with &&"
+        );
+    }
+
+    #[test]
+    fn test_having_with_or_condition() {
+        // Test HAVING with OR condition
+        let result = translate(
+            "SELECT category, COUNT(*) as cnt, SUM(price) as total FROM idx GROUP BY category HAVING COUNT(*) > 10 OR SUM(price) > 1000",
+        )
+        .unwrap();
+
+        assert_eq!(result.command, Command::Aggregate);
+        let filter_idx = result
+            .arguments
+            .iter()
+            .position(|a| a == "FILTER")
+            .expect("FILTER should be present");
+        let filter_expr = &result.arguments[filter_idx + 1];
+        assert_eq!(
+            filter_expr, "(@cnt>10 || @total>1000)",
+            "HAVING should support OR conditions with ||"
+        );
+    }
+
+    #[test]
+    fn test_having_with_complex_condition() {
+        // Test HAVING with complex AND/OR condition
+        let result = translate(
+            "SELECT category, COUNT(*) as cnt, AVG(price) as avg_price, SUM(price) as total FROM idx GROUP BY category HAVING (COUNT(*) >= 2 AND AVG(price) < 500) OR SUM(price) > 5000",
+        )
+        .unwrap();
+
+        assert_eq!(result.command, Command::Aggregate);
+        let filter_idx = result
+            .arguments
+            .iter()
+            .position(|a| a == "FILTER")
+            .expect("FILTER should be present");
+        let filter_expr = &result.arguments[filter_idx + 1];
+        // The expression should have proper nesting
+        assert!(
+            filter_expr.contains("&&") && filter_expr.contains("||"),
+            "HAVING should support complex AND/OR conditions, got: {filter_expr}"
+        );
+    }
+
     // Vector search tests - note: <-> operator parsing depends on sqlparser support
     // These tests verify the AST and translation when vector search is present
     #[test]

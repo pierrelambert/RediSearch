@@ -255,6 +255,8 @@ pub enum Condition {
     },
     /// Is null: field IS NULL
     IsNull { field: String, negated: bool },
+    /// AND expression: combines conditions with AND
+    And(Box<Condition>, Box<Condition>),
     /// OR expression: combines conditions with OR
     Or(Box<Condition>, Box<Condition>),
     /// NOT expression: negates a condition
@@ -277,6 +279,7 @@ impl Condition {
             | Self::Like { field, .. }
             | Self::IsNull { field, .. } => field,
             Self::Or(left, _) => left.field(),
+            Self::And(left, _) => left.field(),
             Self::Not(inner) => inner.field(),
         }
     }

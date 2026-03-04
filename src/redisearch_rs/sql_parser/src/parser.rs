@@ -519,10 +519,25 @@ fn parse_group_by(group_by: &GroupByExpr) -> Result<Option<GroupBy>, SqlError> {
     }
 }
 
-/// Parse HAVING expression (supports aggregate functions).
+/// Parse HAVING expression (supports aggregate functions and AND/OR).
 fn parse_having_expression(expr: &Expr) -> Result<Condition, SqlError> {
     match expr {
         Expr::BinaryOp { left, op, right } => {
+            // Handle AND/OR logical operators
+            match op {
+                BinaryOperator::And => {
+                    let left_cond = parse_having_expression(left)?;
+                    let right_cond = parse_having_expression(right)?;
+                    return Ok(Condition::And(Box::new(left_cond), Box::new(right_cond)));
+                }
+                BinaryOperator::Or => {
+                    let left_cond = parse_having_expression(left)?;
+                    let right_cond = parse_having_expression(right)?;
+                    return Ok(Condition::Or(Box::new(left_cond), Box::new(right_cond)));
+                }
+                _ => {}
+            }
+
             // In HAVING, the left side is typically an aggregate function or alias
             let field = extract_having_field(left)?;
             let value = extract_value(right)?;
@@ -538,6 +553,10 @@ fn parse_having_expression(expr: &Expr) -> Result<Condition, SqlError> {
                     "Operator {op:?} not supported in HAVING clause"
                 ))),
             }
+        }
+        Expr::Nested(inner) => {
+            // Handle parenthesized expressions like (COUNT(*) > 5)
+            parse_having_expression(inner)
         }
         _ => Err(SqlError::unsupported(
             "Only simple comparisons are supported in HAVING clause",
