@@ -195,10 +195,16 @@ fn translate_condition(condition: &Condition) -> Result<String, SqlError> {
             }
         }
         Condition::Or(left, right) => {
-            // OR conditions in RQL use | operator within parentheses
+            // OR conditions in RQL use | operator with spaces between parenthesized sub-conditions
             let left_str = translate_condition(left)?;
             let right_str = translate_condition(right)?;
-            Ok(format!("({left_str}|{right_str})"))
+            Ok(format!("({left_str}) | ({right_str})"))
+        }
+        Condition::Not(inner) => {
+            // NOT negates the inner condition with - prefix
+            let inner_str = translate_condition(inner)?;
+            // Wrap in parentheses and negate
+            Ok(format!("-({inner_str})"))
         }
     }
 }
@@ -233,8 +239,11 @@ fn build_arguments(query: &SelectQuery, command: Command) -> Result<Vec<String>,
                 && let Some(order_by) = &query.order_by
             {
                 args.push("SORTBY".to_string());
-                args.push(order_by.field.clone());
-                args.push(order_by.direction.to_string());
+                // Add all columns: field1 ASC field2 DESC ...
+                for col in &order_by.columns {
+                    args.push(col.field.clone());
+                    args.push(col.direction.to_string());
+                }
             }
 
             // LIMIT clause (for non-vector queries)
@@ -611,7 +620,8 @@ mod tests {
             }),
         ));
         let result = translate(query).unwrap();
-        assert_eq!(result.query_string, "(@a:[1 1]|@b:[2 2])");
+        // RQL OR requires spaces around pipe between parenthesized sub-conditions
+        assert_eq!(result.query_string, "(@a:[1 1]) | (@b:[2 2])");
     }
 
     // Vector search tests

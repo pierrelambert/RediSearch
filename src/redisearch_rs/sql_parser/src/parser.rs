@@ -759,32 +759,35 @@ fn parse_order_by(
         });
     }
 
-    if order_by.len() > 1 {
-        return Err(SqlError::unsupported(
-            "Multiple ORDER BY columns are not supported",
-        ));
-    }
-
-    let order_expr = &order_by[0];
-
-    // Check for vector distance operator: field <-> 'vector'
-    if let Some(vector_search) = try_parse_vector_order_by(&order_expr.expr, limit)? {
+    // Check first expression for vector distance operator
+    let first_expr = &order_by[0];
+    if let Some(vector_search) = try_parse_vector_order_by(&first_expr.expr, limit)? {
+        // Vector search found - additional ORDER BY columns not supported with vector search
+        if order_by.len() > 1 {
+            return Err(SqlError::unsupported(
+                "Multiple ORDER BY columns are not supported with vector search",
+            ));
+        }
         return Ok(OrderByResult {
             order_by: None,
             vector_search: Some(vector_search),
         });
     }
 
-    let field = extract_identifier(&order_expr.expr)?;
-
-    let direction = if order_expr.asc.unwrap_or(true) {
-        SortDirection::Asc
-    } else {
-        SortDirection::Desc
-    };
+    // Parse all ORDER BY columns
+    let mut columns = Vec::with_capacity(order_by.len());
+    for order_expr in order_by {
+        let field = extract_identifier(&order_expr.expr)?;
+        let direction = if order_expr.asc.unwrap_or(true) {
+            SortDirection::Asc
+        } else {
+            SortDirection::Desc
+        };
+        columns.push(OrderByColumn { field, direction });
+    }
 
     Ok(OrderByResult {
-        order_by: Some(OrderBy { field, direction }),
+        order_by: Some(OrderBy { columns }),
         vector_search: None,
     })
 }
