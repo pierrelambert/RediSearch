@@ -60,6 +60,29 @@ static inline bool AREQ_TryReplyWithError(AREQ *req, RedisModuleCtx *ctx, QueryE
 }
 
 /**
+ * Helper to extract RETURN field names from an AREQ for cache key generation.
+ * Returns a pointer array that may be NULL if there are no explicit RETURN fields.
+ * Caller should NOT free the returned array (it points into outFields).
+ */
+static inline void AREQ_GetReturnFieldNames(const AREQ *req, const char ***out_fields, size_t *out_count) {
+  if (req->outFields.explicitReturn && req->outFields.numFields > 0) {
+    // Build a static array of field names - we use a thread-local buffer for simplicity
+    static __thread const char *field_names[128];  // Max 128 return fields
+    size_t count = req->outFields.numFields;
+    if (count > 128) count = 128;
+    for (size_t i = 0; i < count; i++) {
+      field_names[i] = req->outFields.fields[i].name;
+    }
+    *out_fields = field_names;
+    *out_count = count;
+  } else {
+    // SELECT * - no explicit return fields
+    *out_fields = NULL;
+    *out_count = 0;
+  }
+}
+
+/**
  * Get the sorting key of the result. This will be the sorting key of the last
  * RLookup registry. Returns NULL if there is no sorting key
  */
@@ -464,13 +487,19 @@ static void sendChunk_Resp2(AREQ *req, RedisModule_Reply *reply, size_t limit,
           // TODO: Serialize sort parameters
           const char *sort_params = NULL;
 
+          // Get RETURN fields for cache key differentiation
+          const char **return_fields = NULL;
+          size_t return_fields_count = 0;
+          AREQ_GetReturnFieldNames(req, &return_fields, &return_fields_count);
+
           uint64_t revision = sctx->spec->revision;
 
           // Try to get cached results
           size_t cached_size = 0;
           const uint8_t *cached_data = QueryCacheIntegration_Lookup(
             index_name, query_string, result_limit, result_offset,
-            sort_params, revision, &cached_size
+            sort_params, return_fields, return_fields_count,
+            revision, &cached_size
           );
 
           if (cached_data) {
@@ -649,11 +678,17 @@ done_2_err:
         // TODO: Serialize sort parameters
         const char *sort_params = NULL;
 
+        // Get RETURN fields for cache key differentiation
+        const char **return_fields = NULL;
+        size_t return_fields_count = 0;
+        AREQ_GetReturnFieldNames(req, &return_fields, &return_fields_count);
+
         uint64_t revision = sctx->spec->revision;
 
         QueryCacheIntegration_Store(
           index_name, query_string, result_limit, result_offset,
-          sort_params, revision, (const uint8_t *)serialized_cache, serialized_cache_size
+          sort_params, return_fields, return_fields_count,
+          revision, (const uint8_t *)serialized_cache, serialized_cache_size
         );
       }
       rm_free(serialized_cache);
@@ -748,13 +783,19 @@ static void sendChunk_Resp3(AREQ *req, RedisModule_Reply *reply, size_t limit,
           // TODO: Serialize sort parameters
           const char *sort_params = NULL;
 
+          // Get RETURN fields for cache key differentiation
+          const char **return_fields = NULL;
+          size_t return_fields_count = 0;
+          AREQ_GetReturnFieldNames(req, &return_fields, &return_fields_count);
+
           uint64_t revision = sctx->spec->revision;
 
           // Try to get cached results
           size_t cached_size = 0;
           const uint8_t *cached_data = QueryCacheIntegration_Lookup(
             index_name, query_string, result_limit, result_offset,
-            sort_params, revision, &cached_size
+            sort_params, return_fields, return_fields_count,
+            revision, &cached_size
           );
 
           if (cached_data) {
@@ -920,11 +961,17 @@ done_3_err:
         // TODO: Serialize sort parameters
         const char *sort_params = NULL;
 
+        // Get RETURN fields for cache key differentiation
+        const char **return_fields = NULL;
+        size_t return_fields_count = 0;
+        AREQ_GetReturnFieldNames(req, &return_fields, &return_fields_count);
+
         uint64_t revision = sctx->spec->revision;
 
         QueryCacheIntegration_Store(
           index_name, query_string, result_limit, result_offset,
-          sort_params, revision, (const uint8_t *)serialized_cache, serialized_cache_size
+          sort_params, return_fields, return_fields_count,
+          revision, (const uint8_t *)serialized_cache, serialized_cache_size
         );
       }
       rm_free(serialized_cache);

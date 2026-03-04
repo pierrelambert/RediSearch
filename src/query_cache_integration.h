@@ -56,33 +56,39 @@ QueryCacheStats QueryCacheIntegration_GetStats(void);
 
 /**
  * Look up a cached query result.
- * 
+ *
  * @param index_name Name of the index
  * @param query_string Query string
  * @param limit Result limit
  * @param offset Result offset
  * @param sort_params Sort parameters (can be NULL)
+ * @param return_fields Array of field names to return (can be NULL for SELECT *)
+ * @param return_fields_count Number of fields in return_fields (0 for SELECT *)
  * @param index_revision Current revision of the index
  * @param size_out Output parameter for the size of the cached data
  * @return Pointer to cached data, or NULL if not found
  */
 const uint8_t *QueryCacheIntegration_Lookup(const char *index_name, const char *query_string,
                                              size_t limit, size_t offset, const char *sort_params,
+                                             const char **return_fields, size_t return_fields_count,
                                              uint64_t index_revision, size_t *size_out);
 
 /**
  * Store a query result in the cache.
- * 
+ *
  * @param index_name Name of the index
  * @param query_string Query string
  * @param limit Result limit
  * @param offset Result offset
  * @param sort_params Sort parameters (can be NULL)
+ * @param return_fields Array of field names to return (can be NULL for SELECT *)
+ * @param return_fields_count Number of fields in return_fields (0 for SELECT *)
  * @param index_revision Current revision of the index
  * @param data Serialized result data
  * @param data_size Size of the serialized data
  */
 void QueryCacheIntegration_Store(const char *index_name, const char *query_string,
                                   size_t limit, size_t offset, const char *sort_params,
+                                  const char **return_fields, size_t return_fields_count,
                                   uint64_t index_revision, const uint8_t *data, size_t data_size);
 
