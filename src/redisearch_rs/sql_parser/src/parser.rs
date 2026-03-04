@@ -1068,16 +1068,18 @@ mod tests {
     fn test_parse_order_by_asc() {
         let query = parse("SELECT * FROM idx ORDER BY name ASC").unwrap();
         let order_by = query.order_by.unwrap();
-        assert_eq!(order_by.field, "name");
-        assert_eq!(order_by.direction, SortDirection::Asc);
+        assert_eq!(order_by.columns.len(), 1);
+        assert_eq!(order_by.columns[0].field, "name");
+        assert_eq!(order_by.columns[0].direction, SortDirection::Asc);
     }
 
     #[test]
     fn test_parse_order_by_desc() {
         let query = parse("SELECT * FROM idx ORDER BY price DESC").unwrap();
         let order_by = query.order_by.unwrap();
-        assert_eq!(order_by.field, "price");
-        assert_eq!(order_by.direction, SortDirection::Desc);
+        assert_eq!(order_by.columns.len(), 1);
+        assert_eq!(order_by.columns[0].field, "price");
+        assert_eq!(order_by.columns[0].direction, SortDirection::Desc);
     }
 
     #[test]
@@ -1085,7 +1087,29 @@ mod tests {
         // Default should be ASC when not specified
         let query = parse("SELECT * FROM idx ORDER BY name").unwrap();
         let order_by = query.order_by.unwrap();
-        assert_eq!(order_by.direction, SortDirection::Asc);
+        assert_eq!(order_by.columns[0].direction, SortDirection::Asc);
+    }
+
+    #[test]
+    fn test_parse_order_by_multiple_columns() {
+        let query = parse("SELECT * FROM idx ORDER BY category ASC, price DESC").unwrap();
+        let order_by = query.order_by.unwrap();
+        assert_eq!(order_by.columns.len(), 2);
+        assert_eq!(order_by.columns[0].field, "category");
+        assert_eq!(order_by.columns[0].direction, SortDirection::Asc);
+        assert_eq!(order_by.columns[1].field, "price");
+        assert_eq!(order_by.columns[1].direction, SortDirection::Desc);
+    }
+
+    #[test]
+    fn test_parse_order_by_three_columns() {
+        let query =
+            parse("SELECT * FROM idx ORDER BY category ASC, price DESC, name ASC").unwrap();
+        let order_by = query.order_by.unwrap();
+        assert_eq!(order_by.columns.len(), 3);
+        assert_eq!(order_by.columns[0].field, "category");
+        assert_eq!(order_by.columns[1].field, "price");
+        assert_eq!(order_by.columns[2].field, "name");
     }
 
     // LIMIT tests
@@ -1158,14 +1182,6 @@ mod tests {
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(err.message.contains("JOIN"));
-    }
-
-    #[test]
-    fn test_parse_multiple_order_by_not_supported() {
-        let result = parse("SELECT * FROM idx ORDER BY a, b");
-        assert!(result.is_err());
-        let err = result.unwrap_err();
-        assert!(err.message.contains("Multiple ORDER BY"));
     }
 
     #[test]
