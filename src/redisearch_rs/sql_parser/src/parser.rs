@@ -345,56 +345,161 @@ fn parse_aggregate_function(
     alias: Option<String>,
 ) -> Result<Option<AggregateExpr>, SqlError> {
     let name = func.name.to_string().to_uppercase();
+    let args = extract_function_args(func)?;
 
-    let agg_type = match name.as_str() {
-        "COUNT" => Some(AggregateFunction::Count),
-        "SUM" => Some(AggregateFunction::Sum),
-        "AVG" => Some(AggregateFunction::Avg),
-        "MIN" => Some(AggregateFunction::Min),
-        "MAX" => Some(AggregateFunction::Max),
-        _ => None,
-    };
-
-    let Some(agg_type) = agg_type else {
-        return Ok(None);
-    };
-
-    // Extract the field argument
-    let field = match &func.args {
-        FunctionArguments::List(arg_list) => {
-            if arg_list.args.is_empty() {
+    // Match simple single-argument aggregates
+    let result = match name.as_str() {
+        "COUNT" => {
+            let field = if args.is_empty() || args.first().map(|a| a.as_str()) == Some("*") {
                 None
-            } else if arg_list.args.len() == 1 {
-                match &arg_list.args[0] {
-                    FunctionArg::Unnamed(FunctionArgExpr::Wildcard) => None, // COUNT(*)
-                    FunctionArg::Unnamed(FunctionArgExpr::Expr(expr)) => {
-                        Some(extract_identifier(expr)?)
-                    }
+            } else {
+                Some(args.into_iter().next().unwrap())
+            };
+            Some((AggregateFunction::Count, field))
+        }
+        "SUM" => Some((AggregateFunction::Sum, args.into_iter().next())),
+        "AVG" => Some((AggregateFunction::Avg, args.into_iter().next())),
+        "MIN" => Some((AggregateFunction::Min, args.into_iter().next())),
+        "MAX" => Some((AggregateFunction::Max, args.into_iter().next())),
+        "COUNT_DISTINCT" => Some((AggregateFunction::CountDistinct, args.into_iter().next())),
+        "COUNT_DISTINCTISH" => Some((AggregateFunction::CountDistinctish, args.into_iter().next())),
+        "STDDEV" => Some((AggregateFunction::Stddev, args.into_iter().next())),
+        "TOLIST" => Some((AggregateFunction::Tolist, args.into_iter().next())),
+        "HLL" => Some((AggregateFunction::Hll, args.into_iter().next())),
+        "HLL_SUM" => Some((AggregateFunction::HllSum, args.into_iter().next())),
+        "QUANTILE" => {
+            // QUANTILE(field, percentile) - requires 2 arguments
+            if args.len() != 2 {
+                return Err(SqlError::syntax(
+                    "QUANTILE requires exactly 2 arguments: QUANTILE(field, percentile)",
+                ));
+            }
+            let field = args[0].clone();
+            let percentile: f64 = args[1].parse().map_err(|_| {
+                SqlError::syntax(format!(
+                    "QUANTILE percentile must be a number between 0.0 and 1.0, got: '{}'",
+                    args[1]
+                ))
+            })?;
+            if !(0.0..=1.0).contains(&percentile) {
+                return Err(SqlError::syntax(format!(
+                    "QUANTILE percentile must be between 0.0 and 1.0, got: {}",
+                    percentile
+                )));
+            }
+            Some((AggregateFunction::Quantile { percentile }, Some(field)))
+        }
+        "RANDOM_SAMPLE" => {
+            // RANDOM_SAMPLE(field, size) - requires 2 arguments
+            if args.len() != 2 {
+                return Err(SqlError::syntax(
+                    "RANDOM_SAMPLE requires exactly 2 arguments: RANDOM_SAMPLE(field, size)",
+                ));
+            }
+            let field = args[0].clone();
+            let size: u32 = args[1].parse().map_err(|_| {
+                SqlError::syntax(format!(
+                    "RANDOM_SAMPLE size must be a positive integer, got: '{}'",
+                    args[1]
+                ))
+            })?;
+            if size == 0 || size > 1000 {
+                return Err(SqlError::syntax(format!(
+                    "RANDOM_SAMPLE size must be between 1 and 1000, got: {}",
+                    size
+                )));
+            }
+            Some((AggregateFunction::RandomSample { size }, Some(field)))
+        }
+        "FIRST_VALUE" => {
+            // FIRST_VALUE(field, sort_field) or FIRST_VALUE(field, sort_field, 'ASC'/'DESC')
+            // Simplified syntax since SQL standard window function syntax is complex
+            if args.len() < 2 || args.len() > 3 {
+                return Err(SqlError::syntax(
+                    "FIRST_VALUE requires 2-3 arguments: FIRST_VALUE(field, sort_field [, 'ASC'|'DESC'])",
+                ));
+            }
+            let field = args[0].clone();
+            let sort_field = args[1].clone();
+            let ascending = if args.len() == 3 {
+                match args[2].to_uppercase().as_str() {
+                    "ASC" => true,
+                    "DESC" => false,
                     _ => {
-                        return Err(SqlError::unsupported(
-                            "Unsupported aggregate function argument",
+                        return Err(SqlError::syntax(
+                            "FIRST_VALUE third argument must be 'ASC' or 'DESC'",
                         ));
                     }
                 }
             } else {
-                return Err(SqlError::unsupported(
-                    "Aggregate functions with multiple arguments are not supported",
-                ));
-            }
+                false // Default to DESC as per RediSearch convention
+            };
+            Some((
+                AggregateFunction::FirstValue {
+                    sort_field,
+                    ascending,
+                },
+                Some(field),
+            ))
         }
-        FunctionArguments::None => None,
-        FunctionArguments::Subquery(_) => {
-            return Err(SqlError::unsupported(
-                "Subqueries in aggregate functions are not supported",
-            ));
-        }
+        _ => None,
     };
 
-    Ok(Some(AggregateExpr {
-        function: agg_type,
-        field,
-        alias,
-    }))
+    match result {
+        Some((function, field)) => Ok(Some(AggregateExpr {
+            function,
+            field,
+            alias,
+        })),
+        None => Ok(None),
+    }
+}
+
+/// Extract function arguments as strings.
+fn extract_function_args(func: &sqlparser::ast::Function) -> Result<Vec<String>, SqlError> {
+    match &func.args {
+        FunctionArguments::List(arg_list) => {
+            let mut args = Vec::new();
+            for arg in &arg_list.args {
+                match arg {
+                    FunctionArg::Unnamed(FunctionArgExpr::Wildcard) => {
+                        args.push("*".to_string());
+                    }
+                    FunctionArg::Unnamed(FunctionArgExpr::Expr(expr)) => {
+                        // Handle numeric literals, identifiers, and string literals
+                        match expr {
+                            Expr::Identifier(ident) => args.push(ident.value.clone()),
+                            Expr::Value(sqlparser::ast::Value::Number(n, _)) => {
+                                args.push(n.clone())
+                            }
+                            Expr::Value(sqlparser::ast::Value::SingleQuotedString(s))
+                            | Expr::Value(sqlparser::ast::Value::DoubleQuotedString(s)) => {
+                                args.push(s.clone())
+                            }
+                            Expr::CompoundIdentifier(parts) => {
+                                if let Some(last) = parts.last() {
+                                    args.push(last.value.clone());
+                                }
+                            }
+                            _ => {
+                                return Err(SqlError::unsupported(format!(
+                                    "Unsupported function argument expression: {expr:?}"
+                                )));
+                            }
+                        }
+                    }
+                    _ => {
+                        return Err(SqlError::unsupported("Unsupported function argument type"));
+                    }
+                }
+            }
+            Ok(args)
+        }
+        FunctionArguments::None => Ok(Vec::new()),
+        FunctionArguments::Subquery(_) => Err(SqlError::unsupported(
+            "Subqueries in aggregate functions are not supported",
+        )),
+    }
 }
 
 /// Parse GROUP BY clause.

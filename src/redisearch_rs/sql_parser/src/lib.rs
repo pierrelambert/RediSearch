@@ -820,4 +820,191 @@ mod tests {
         assert_eq!(args[sortby_idx + 4], "@cnt");
         assert_eq!(args[sortby_idx + 5], "DESC");
     }
+
+    // ========================================
+    // New Aggregate Functions Tests
+    // ========================================
+
+    #[test]
+    fn test_count_distinct() {
+        let result = translate("SELECT COUNT_DISTINCT(category) FROM products").unwrap();
+        assert_eq!(result.command, Command::Aggregate);
+        let args = &result.arguments;
+        assert!(args.contains(&"REDUCE".to_string()));
+        assert!(args.contains(&"COUNT_DISTINCT".to_string()));
+        assert!(args.contains(&"@category".to_string()));
+    }
+
+    #[test]
+    fn test_count_distinctish() {
+        let result = translate("SELECT COUNT_DISTINCTISH(user_id) FROM events").unwrap();
+        assert_eq!(result.command, Command::Aggregate);
+        let args = &result.arguments;
+        assert!(args.contains(&"REDUCE".to_string()));
+        assert!(args.contains(&"COUNT_DISTINCTISH".to_string()));
+        assert!(args.contains(&"@user_id".to_string()));
+    }
+
+    #[test]
+    fn test_stddev() {
+        let result = translate("SELECT STDDEV(price) FROM products").unwrap();
+        assert_eq!(result.command, Command::Aggregate);
+        let args = &result.arguments;
+        assert!(args.contains(&"REDUCE".to_string()));
+        assert!(args.contains(&"STDDEV".to_string()));
+        assert!(args.contains(&"@price".to_string()));
+    }
+
+    #[test]
+    fn test_quantile() {
+        let result = translate("SELECT QUANTILE(latency, 0.99) FROM requests").unwrap();
+        assert_eq!(result.command, Command::Aggregate);
+        let args = &result.arguments;
+        assert!(args.contains(&"REDUCE".to_string()));
+        assert!(args.contains(&"QUANTILE".to_string()));
+        assert!(args.contains(&"2".to_string())); // 2 arguments
+        assert!(args.contains(&"@latency".to_string()));
+        assert!(args.contains(&"0.99".to_string()));
+    }
+
+    #[test]
+    fn test_quantile_invalid_percentile() {
+        // Percentile must be between 0.0 and 1.0
+        let result = translate("SELECT QUANTILE(latency, 1.5) FROM requests");
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.message.contains("between 0.0 and 1.0"));
+    }
+
+    #[test]
+    fn test_tolist() {
+        let result =
+            translate("SELECT category, TOLIST(name) FROM products GROUP BY category").unwrap();
+        assert_eq!(result.command, Command::Aggregate);
+        let args = &result.arguments;
+        assert!(args.contains(&"REDUCE".to_string()));
+        assert!(args.contains(&"TOLIST".to_string()));
+        assert!(args.contains(&"@name".to_string()));
+    }
+
+    #[test]
+    fn test_random_sample() {
+        let result =
+            translate("SELECT category, RANDOM_SAMPLE(name, 5) FROM products GROUP BY category")
+                .unwrap();
+        assert_eq!(result.command, Command::Aggregate);
+        let args = &result.arguments;
+        assert!(args.contains(&"REDUCE".to_string()));
+        assert!(args.contains(&"RANDOM_SAMPLE".to_string()));
+        assert!(args.contains(&"2".to_string())); // 2 arguments
+        assert!(args.contains(&"@name".to_string()));
+        assert!(args.contains(&"5".to_string()));
+    }
+
+    #[test]
+    fn test_random_sample_invalid_size() {
+        // Size must be between 1 and 1000
+        let result = translate("SELECT RANDOM_SAMPLE(name, 1001) FROM products");
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.message.contains("between 1 and 1000"));
+    }
+
+    #[test]
+    fn test_first_value_desc() {
+        let result = translate(
+            "SELECT category, FIRST_VALUE(name, price, 'DESC') FROM products GROUP BY category",
+        )
+        .unwrap();
+        assert_eq!(result.command, Command::Aggregate);
+        let args = &result.arguments;
+        assert!(args.contains(&"REDUCE".to_string()));
+        assert!(args.contains(&"FIRST_VALUE".to_string()));
+        assert!(args.contains(&"4".to_string())); // 4 arguments
+        assert!(args.contains(&"@name".to_string()));
+        assert!(args.contains(&"BY".to_string()));
+        assert!(args.contains(&"@price".to_string()));
+        assert!(args.contains(&"DESC".to_string()));
+    }
+
+    #[test]
+    fn test_first_value_asc() {
+        let result = translate(
+            "SELECT category, FIRST_VALUE(name, price, 'ASC') FROM products GROUP BY category",
+        )
+        .unwrap();
+        assert_eq!(result.command, Command::Aggregate);
+        let args = &result.arguments;
+        assert!(args.contains(&"REDUCE".to_string()));
+        assert!(args.contains(&"FIRST_VALUE".to_string()));
+        assert!(args.contains(&"ASC".to_string()));
+    }
+
+    #[test]
+    fn test_first_value_default_desc() {
+        // Default direction is DESC when not specified
+        let result =
+            translate("SELECT category, FIRST_VALUE(name, price) FROM products GROUP BY category")
+                .unwrap();
+        assert_eq!(result.command, Command::Aggregate);
+        let args = &result.arguments;
+        assert!(args.contains(&"DESC".to_string()));
+    }
+
+    #[test]
+    fn test_hll() {
+        let result = translate("SELECT HLL(user_id) FROM events").unwrap();
+        assert_eq!(result.command, Command::Aggregate);
+        let args = &result.arguments;
+        assert!(args.contains(&"REDUCE".to_string()));
+        assert!(args.contains(&"HLL".to_string()));
+        assert!(args.contains(&"@user_id".to_string()));
+    }
+
+    #[test]
+    fn test_hll_sum() {
+        let result = translate("SELECT HLL_SUM(hll_field) FROM shards").unwrap();
+        assert_eq!(result.command, Command::Aggregate);
+        let args = &result.arguments;
+        assert!(args.contains(&"REDUCE".to_string()));
+        assert!(args.contains(&"HLL_SUM".to_string()));
+        assert!(args.contains(&"@hll_field".to_string()));
+    }
+
+    #[test]
+    fn test_count_distinct_with_group_by() {
+        let result =
+            translate("SELECT region, COUNT_DISTINCT(user_id) FROM events GROUP BY region")
+                .unwrap();
+        assert_eq!(result.command, Command::Aggregate);
+        let args = &result.arguments;
+        assert!(args.contains(&"GROUPBY".to_string()));
+        assert!(args.contains(&"@region".to_string()));
+        assert!(args.contains(&"COUNT_DISTINCT".to_string()));
+    }
+
+    #[test]
+    fn test_multiple_new_aggregates() {
+        let result = translate(
+            "SELECT category, COUNT_DISTINCT(brand), STDDEV(price), TOLIST(name) FROM products GROUP BY category",
+        )
+        .unwrap();
+        assert_eq!(result.command, Command::Aggregate);
+        let args = &result.arguments;
+        // Should have 3 REDUCE clauses
+        let reduce_count = args.iter().filter(|&s| s == "REDUCE").count();
+        assert_eq!(reduce_count, 3);
+        assert!(args.contains(&"COUNT_DISTINCT".to_string()));
+        assert!(args.contains(&"STDDEV".to_string()));
+        assert!(args.contains(&"TOLIST".to_string()));
+    }
+
+    #[test]
+    fn test_quantile_with_alias() {
+        let result = translate("SELECT QUANTILE(latency, 0.95) AS p95 FROM requests").unwrap();
+        assert_eq!(result.command, Command::Aggregate);
+        let args = &result.arguments;
+        assert!(args.contains(&"AS".to_string()));
+        assert!(args.contains(&"p95".to_string()));
+    }
 }

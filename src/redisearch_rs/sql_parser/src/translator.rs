@@ -361,17 +361,68 @@ fn build_arguments(query: &SelectQuery, command: Command) -> Result<Vec<String>,
 
 /// Build a REDUCE clause for an aggregate function.
 fn build_reduce_clause(agg: &AggregateExpr) -> Vec<String> {
+    use crate::ast::AggregateFunction;
+
     let mut args = Vec::new();
     args.push("REDUCE".to_string());
     args.push(agg.function.to_string());
 
-    match &agg.field {
-        Some(field) => {
-            args.push("1".to_string()); // Number of arguments
-            args.push(format!("@{field}"));
+    // Build arguments based on function type
+    match &agg.function {
+        // Simple functions with 0 or 1 field argument
+        AggregateFunction::Count
+        | AggregateFunction::Sum
+        | AggregateFunction::Avg
+        | AggregateFunction::Min
+        | AggregateFunction::Max
+        | AggregateFunction::CountDistinct
+        | AggregateFunction::CountDistinctish
+        | AggregateFunction::Stddev
+        | AggregateFunction::Tolist
+        | AggregateFunction::Hll
+        | AggregateFunction::HllSum => {
+            match &agg.field {
+                Some(field) => {
+                    args.push("1".to_string());
+                    args.push(format!("@{field}"));
+                }
+                None => {
+                    args.push("0".to_string()); // COUNT(*) has 0 arguments
+                }
+            }
         }
-        None => {
-            args.push("0".to_string()); // COUNT(*) has 0 arguments
+        // QUANTILE(field, percentile) -> REDUCE QUANTILE 2 @field percentile
+        AggregateFunction::Quantile { percentile } => {
+            if let Some(field) = &agg.field {
+                args.push("2".to_string());
+                args.push(format!("@{field}"));
+                args.push(percentile.to_string());
+            }
+        }
+        // RANDOM_SAMPLE(field, size) -> REDUCE RANDOM_SAMPLE 2 @field size
+        AggregateFunction::RandomSample { size } => {
+            if let Some(field) = &agg.field {
+                args.push("2".to_string());
+                args.push(format!("@{field}"));
+                args.push(size.to_string());
+            }
+        }
+        // FIRST_VALUE(field BY sort_field ASC/DESC) -> REDUCE FIRST_VALUE 4 @field BY @sort_field ASC/DESC
+        AggregateFunction::FirstValue {
+            sort_field,
+            ascending,
+        } => {
+            if let Some(field) = &agg.field {
+                args.push("4".to_string());
+                args.push(format!("@{field}"));
+                args.push("BY".to_string());
+                args.push(format!("@{sort_field}"));
+                args.push(if *ascending {
+                    "ASC".to_string()
+                } else {
+                    "DESC".to_string()
+                });
+            }
         }
     }
 
@@ -380,16 +431,51 @@ fn build_reduce_clause(agg: &AggregateExpr) -> Vec<String> {
         args.push("AS".to_string());
         args.push(alias.clone());
     } else {
-        // Generate default alias
-        let default_alias = match agg.field {
-            Some(ref f) => format!("{}_{}", agg.function.to_string().to_lowercase(), f),
-            None => agg.function.to_string().to_lowercase(),
-        };
+        // Generate default alias based on function type
+        let default_alias = generate_default_alias(agg);
         args.push("AS".to_string());
         args.push(default_alias);
     }
 
     args
+}
+
+/// Generate default alias for an aggregate function.
+fn generate_default_alias(agg: &AggregateExpr) -> String {
+    use crate::ast::AggregateFunction;
+
+    let base_name = match &agg.function {
+        AggregateFunction::Count => "count",
+        AggregateFunction::Sum => "sum",
+        AggregateFunction::Avg => "avg",
+        AggregateFunction::Min => "min",
+        AggregateFunction::Max => "max",
+        AggregateFunction::CountDistinct => "count_distinct",
+        AggregateFunction::CountDistinctish => "count_distinctish",
+        AggregateFunction::Stddev => "stddev",
+        AggregateFunction::Quantile { percentile } => {
+            // Include percentile in alias for clarity
+            return match &agg.field {
+                Some(f) => format!("quantile_{}_{}", (percentile * 100.0) as u32, f),
+                None => format!("quantile_{}", (percentile * 100.0) as u32),
+            };
+        }
+        AggregateFunction::Tolist => "tolist",
+        AggregateFunction::FirstValue { .. } => "first_value",
+        AggregateFunction::RandomSample { size } => {
+            return match &agg.field {
+                Some(f) => format!("random_sample_{}_{}", size, f),
+                None => format!("random_sample_{}", size),
+            };
+        }
+        AggregateFunction::Hll => "hll",
+        AggregateFunction::HllSum => "hll_sum",
+    };
+
+    match &agg.field {
+        Some(f) => format!("{base_name}_{f}"),
+        None => base_name.to_string(),
+    }
 }
 
 /// Translate HAVING condition to FT.AGGREGATE FILTER expression.
@@ -449,9 +535,11 @@ fn resolve_having_field<'a>(field: &'a str, aggregates: &'a [AggregateExpr]) -> 
     // Try to find a matching aggregate
     for agg in aggregates {
         // Generate the default name that extract_having_field would produce
+        // Use the same logic as generate_default_alias for base function names
+        let base_name = agg.function.to_string().to_lowercase();
         let default_name = match &agg.field {
-            Some(f) => format!("{}_{}", agg.function.to_string().to_lowercase(), f),
-            None => agg.function.to_string().to_lowercase(),
+            Some(f) => format!("{base_name}_{f}"),
+            None => base_name,
         };
 
         // If the field matches the default name, return the aggregate's alias

@@ -60,7 +60,7 @@ pub struct AggregateExpr {
 }
 
 /// Supported aggregate functions.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum AggregateFunction {
     /// COUNT(*) or COUNT(field)
     Count,
@@ -72,6 +72,24 @@ pub enum AggregateFunction {
     Min,
     /// MAX(field)
     Max,
+    /// COUNT_DISTINCT(field) - exact unique count
+    CountDistinct,
+    /// COUNT_DISTINCTISH(field) - approximate unique count using HyperLogLog
+    CountDistinctish,
+    /// STDDEV(field) - standard deviation
+    Stddev,
+    /// QUANTILE(field, percentile) - percentile value (0.0-1.0)
+    Quantile { percentile: f64 },
+    /// TOLIST(field) - collect all values into an array
+    Tolist,
+    /// FIRST_VALUE(field BY sort_field ASC|DESC) - first value when sorted
+    FirstValue { sort_field: String, ascending: bool },
+    /// RANDOM_SAMPLE(field, size) - random sample of values (max 1000)
+    RandomSample { size: u32 },
+    /// HLL(field) - returns raw HyperLogLog struct
+    Hll,
+    /// HLL_SUM(field) - merges HyperLogLog values
+    HllSum,
 }
 
 impl std::fmt::Display for AggregateFunction {
@@ -82,6 +100,15 @@ impl std::fmt::Display for AggregateFunction {
             Self::Avg => write!(f, "AVG"),
             Self::Min => write!(f, "MIN"),
             Self::Max => write!(f, "MAX"),
+            Self::CountDistinct => write!(f, "COUNT_DISTINCT"),
+            Self::CountDistinctish => write!(f, "COUNT_DISTINCTISH"),
+            Self::Stddev => write!(f, "STDDEV"),
+            Self::Quantile { .. } => write!(f, "QUANTILE"),
+            Self::Tolist => write!(f, "TOLIST"),
+            Self::FirstValue { .. } => write!(f, "FIRST_VALUE"),
+            Self::RandomSample { .. } => write!(f, "RANDOM_SAMPLE"),
+            Self::Hll => write!(f, "HLL"),
+            Self::HllSum => write!(f, "HLL_SUM"),
         }
     }
 }
