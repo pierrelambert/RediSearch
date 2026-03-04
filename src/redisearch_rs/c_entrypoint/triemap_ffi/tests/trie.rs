@@ -28,7 +28,8 @@ macro_rules! assert_entries {
     };
 }
 
-unsafe extern "C" fn do_not_free(_val: *mut c_void) {
+// SAFETY: This callback is used as a no-op free function.
+const unsafe extern "C" fn do_not_free(_val: *mut c_void) {
     // We're using stack-allocated types (i.e. integers) as values,
     // so there's nothing to be freed.
 }

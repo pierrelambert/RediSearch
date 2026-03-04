@@ -74,26 +74,14 @@ mod tests {
 
     #[test]
     fn test_validate_empty_index_name() {
-        let query = SelectQuery {
-            fields: vec![],
-            index_name: "".to_string(),
-            conditions: vec![],
-            order_by: None,
-            limit: None,
-        };
+        let query = SelectQuery::new("");
         let result = validate_query(&query);
         assert!(result.is_err());
     }
 
     #[test]
     fn test_validate_valid_index_name() {
-        let query = SelectQuery {
-            fields: vec![],
-            index_name: "my_index-123".to_string(),
-            conditions: vec![],
-            order_by: None,
-            limit: None,
-        };
+        let query = SelectQuery::new("my_index-123");
         let result = validate_query(&query);
         assert!(result.is_ok());
     }
@@ -118,13 +106,7 @@ mod tests {
 
     #[test]
     fn test_validate_index_name_special_chars() {
-        let query = SelectQuery {
-            fields: vec![],
-            index_name: "my@index".to_string(),
-            conditions: vec![],
-            order_by: None,
-            limit: None,
-        };
+        let query = SelectQuery::new("my@index");
         let result = validate_query(&query);
         assert!(result.is_err());
         let err = result.unwrap_err();
@@ -133,13 +115,7 @@ mod tests {
 
     #[test]
     fn test_validate_index_name_with_space() {
-        let query = SelectQuery {
-            fields: vec![],
-            index_name: "my index".to_string(),
-            conditions: vec![],
-            order_by: None,
-            limit: None,
-        };
+        let query = SelectQuery::new("my index");
         let result = validate_query(&query);
         assert!(result.is_err());
     }

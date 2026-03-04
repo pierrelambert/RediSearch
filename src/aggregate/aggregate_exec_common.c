@@ -65,13 +65,9 @@
  }
 
  void startPipelineCommon(CommonPipelineCtx *ctx, ResultProcessor *rp, SearchResult ***results, SearchResult *r, int *rc) {
-   fprintf(stderr, "[QueryCache] startPipelineCommon: needsAggregation=%d timeoutPolicy=%d oomPolicy=%d\n",
-           ctx->needsAggregation, ctx->timeoutPolicy, ctx->oomPolicy);
    if (ctx->timeoutPolicy == TimeoutPolicy_Fail || ctx->oomPolicy == OomPolicy_Fail || ctx->needsAggregation) {
      // Aggregate all results before populating the response
-     fprintf(stderr, "[QueryCache] Aggregating results...\n");
      *results = AggregateResults(rp, rc);
-     fprintf(stderr, "[QueryCache] Aggregated results=%p\n", (void*)*results);
      // Check timeout after aggregation
      if (!ctx->skipTimeoutChecks && TimedOut(ctx->timeout) == TIMED_OUT) {
        *rc = RS_RESULT_TIMEDOUT;

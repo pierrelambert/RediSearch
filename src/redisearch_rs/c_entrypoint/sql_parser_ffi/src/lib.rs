@@ -30,6 +30,8 @@ pub enum SqlCommand {
     Search = 0,
     /// Use FT.AGGREGATE for this query.
     Aggregate = 1,
+    /// Use FT.HYBRID for weighted vector + text search.
+    Hybrid = 2,
 }
 
 impl From<Command> for SqlCommand {
@@ -37,6 +39,7 @@ impl From<Command> for SqlCommand {
         match cmd {
             Command::Search => SqlCommand::Search,
             Command::Aggregate => SqlCommand::Aggregate,
+            Command::Hybrid => SqlCommand::Hybrid,
         }
     }
 }
@@ -523,5 +526,61 @@ mod tests {
             let stats = sql_cache_get_stats();
             assert_eq!(stats.entries, 2);
         });
+    }
+
+    #[test]
+    fn test_ffi_vector_search() {
+        // Test vector search with <-> operator (pgvector syntax)
+        let sql =
+            CString::new("SELECT * FROM products ORDER BY embedding <-> '[0.1, 0.2]' LIMIT 5")
+                .unwrap();
+        // SAFETY: sql is a valid null-terminated C string
+        let result = unsafe { sql_translate(sql.as_ptr()) };
+        assert!(result.success);
+        assert_eq!(result.command, SqlCommand::Search);
+
+        // SAFETY: result was returned by sql_translate
+        unsafe {
+            let query_string = CStr::from_ptr(result.query_string).to_str().unwrap();
+            assert_eq!(query_string, "*=>[KNN 5 @embedding $BLOB]");
+
+            // Check arguments include PARAMS with vector blob
+            let args: Vec<String> = (0..result.arguments_len)
+                .map(|i| {
+                    CStr::from_ptr(*result.arguments.add(i))
+                        .to_str()
+                        .unwrap()
+                        .to_string()
+                })
+                .collect();
+            assert!(args.contains(&"PARAMS".to_string()));
+            assert!(args.contains(&"BLOB".to_string()));
+            assert!(args.contains(&"[0.1, 0.2]".to_string()));
+
+            sql_translation_result_free(result);
+        }
+    }
+
+    #[test]
+    fn test_ffi_vector_search_with_filter() {
+        // Test hybrid search: filter + vector
+        let sql = CString::new(
+            "SELECT * FROM products WHERE category = 'electronics' ORDER BY embedding <-> '[0.5]' LIMIT 3",
+        )
+        .unwrap();
+        // SAFETY: sql is a valid null-terminated C string
+        let result = unsafe { sql_translate(sql.as_ptr()) };
+        assert!(result.success);
+
+        // SAFETY: result was returned by sql_translate
+        unsafe {
+            let query_string = CStr::from_ptr(result.query_string).to_str().unwrap();
+            assert_eq!(
+                query_string,
+                "@category:{electronics}=>[KNN 3 @embedding $BLOB]"
+            );
+
+            sql_translation_result_free(result);
+        }
     }
 }

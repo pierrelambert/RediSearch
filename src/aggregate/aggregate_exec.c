@@ -60,6 +60,72 @@ static inline bool AREQ_TryReplyWithError(AREQ *req, RedisModuleCtx *ctx, QueryE
 }
 
 /**
+ * Helper to extract RETURN field names from an AREQ for cache key generation.
+ * Returns a pointer array that may be NULL if there are no explicit RETURN fields.
+ * Caller should NOT free the returned array (it points into outFields).
+ */
+static inline void AREQ_GetReturnFieldNames(const AREQ *req, const char ***out_fields, size_t *out_count) {
+  if (req->outFields.explicitReturn && req->outFields.numFields > 0) {
+    // Build a static array of field names - we use a thread-local buffer for simplicity
+    static __thread const char *field_names[128];  // Max 128 return fields
+    size_t count = req->outFields.numFields;
+    if (count > 128) count = 128;
+    for (size_t i = 0; i < count; i++) {
+      field_names[i] = req->outFields.fields[i].name;
+    }
+    *out_fields = field_names;
+    *out_count = count;
+  } else {
+    // SELECT * - no explicit return fields
+    *out_fields = NULL;
+    *out_count = 0;
+  }
+}
+
+/**
+ * Helper to serialize SORTBY parameters from an AREQ for cache key generation.
+ * Produces a string like "field1:ASC,field2:DESC" that can be hashed.
+ * Returns NULL if no SORTBY is specified.
+ * Caller must NOT free the returned string (uses thread-local buffer).
+ */
+static inline const char *AREQ_GetSortParams(const AREQ *req) {
+  AGGPlan *plan = AREQ_AGGPlan((AREQ *)req);
+  PLN_ArrangeStep *arng = AGPLN_GetArrangeStep(plan);
+  if (!arng || !arng->sortKeys || array_len(arng->sortKeys) == 0) {
+    return NULL;
+  }
+
+  // Thread-local buffer for sort params string
+  static __thread char sort_params_buf[1024];
+  char *p = sort_params_buf;
+  char *end = sort_params_buf + sizeof(sort_params_buf) - 1;
+
+  size_t numKeys = array_len(arng->sortKeys);
+  for (size_t i = 0; i < numKeys && p < end; i++) {
+    if (i > 0 && p < end) {
+      *p++ = ',';
+    }
+    // Copy field name
+    const char *field = arng->sortKeys[i];
+    while (*field && p < end) {
+      *p++ = *field++;
+    }
+    // Add direction
+    if (p < end) {
+      *p++ = ':';
+    }
+    // Check ASC/DESC using the bitmap (bit set = ASC, bit clear = DESC)
+    const char *dir = SORTASCMAP_GETASC(arng->sortAscMap, i) ? "ASC" : "DESC";
+    while (*dir && p < end) {
+      *p++ = *dir++;
+    }
+  }
+  *p = '\0';
+
+  return sort_params_buf;
+}
+
+/**
  * Get the sorting key of the result. This will be the sorting key of the last
  * RLookup registry. Returns NULL if there is no sorting key
  */
@@ -351,8 +417,6 @@ static void startPipeline(AREQ *req, ResultProcessor *rp, SearchResult ***result
     PLN_ArrangeStep *arng = AGPLN_GetArrangeStep(plan);
     size_t result_limit = arng && arng->isLimited ? arng->limit : DEFAULT_LIMIT;
     needsAggregation = QueryCache_ShouldCache(reqFlags, result_limit);
-    fprintf(stderr, "[QueryCache] startPipeline: needsAggregation=%d shouldCache=%d limit=%zu\n",
-            needsAggregation, QueryCache_ShouldCache(reqFlags, result_limit), result_limit);
   }
 
   CommonPipelineCtx ctx = {
@@ -461,8 +525,13 @@ static void sendChunk_Resp2(AREQ *req, RedisModule_Reply *reply, size_t limit,
           const char *index_name = IndexSpec_FormatName(sctx->spec, false);
           const char *query_string = req->query;
 
-          // TODO: Serialize sort parameters
-          const char *sort_params = NULL;
+          // Get SORTBY parameters for cache key differentiation (includes direction)
+          const char *sort_params = AREQ_GetSortParams(req);
+
+          // Get RETURN fields for cache key differentiation
+          const char **return_fields = NULL;
+          size_t return_fields_count = 0;
+          AREQ_GetReturnFieldNames(req, &return_fields, &return_fields_count);
 
           uint64_t revision = sctx->spec->revision;
 
@@ -470,7 +539,8 @@ static void sendChunk_Resp2(AREQ *req, RedisModule_Reply *reply, size_t limit,
           size_t cached_size = 0;
           const uint8_t *cached_data = QueryCacheIntegration_Lookup(
             index_name, query_string, result_limit, result_offset,
-            sort_params, revision, &cached_size
+            sort_params, return_fields, return_fields_count,
+            revision, &cached_size
           );
 
           if (cached_data) {
@@ -646,14 +716,20 @@ done_2_err:
         size_t result_limit = arng && arng->isLimited ? arng->limit : DEFAULT_LIMIT;
         size_t result_offset = arng && arng->isLimited ? arng->offset : 0;
 
-        // TODO: Serialize sort parameters
-        const char *sort_params = NULL;
+        // Get SORTBY parameters for cache key differentiation (includes direction)
+        const char *sort_params = AREQ_GetSortParams(req);
+
+        // Get RETURN fields for cache key differentiation
+        const char **return_fields = NULL;
+        size_t return_fields_count = 0;
+        AREQ_GetReturnFieldNames(req, &return_fields, &return_fields_count);
 
         uint64_t revision = sctx->spec->revision;
 
         QueryCacheIntegration_Store(
           index_name, query_string, result_limit, result_offset,
-          sort_params, revision, (const uint8_t *)serialized_cache, serialized_cache_size
+          sort_params, return_fields, return_fields_count,
+          revision, (const uint8_t *)serialized_cache, serialized_cache_size
         );
       }
       rm_free(serialized_cache);
@@ -745,8 +821,13 @@ static void sendChunk_Resp3(AREQ *req, RedisModule_Reply *reply, size_t limit,
           const char *index_name = IndexSpec_FormatName(sctx->spec, false);
           const char *query_string = req->query;
 
-          // TODO: Serialize sort parameters
-          const char *sort_params = NULL;
+          // Get SORTBY parameters for cache key differentiation (includes direction)
+          const char *sort_params = AREQ_GetSortParams(req);
+
+          // Get RETURN fields for cache key differentiation
+          const char **return_fields = NULL;
+          size_t return_fields_count = 0;
+          AREQ_GetReturnFieldNames(req, &return_fields, &return_fields_count);
 
           uint64_t revision = sctx->spec->revision;
 
@@ -754,7 +835,8 @@ static void sendChunk_Resp3(AREQ *req, RedisModule_Reply *reply, size_t limit,
           size_t cached_size = 0;
           const uint8_t *cached_data = QueryCacheIntegration_Lookup(
             index_name, query_string, result_limit, result_offset,
-            sort_params, revision, &cached_size
+            sort_params, return_fields, return_fields_count,
+            revision, &cached_size
           );
 
           if (cached_data) {
@@ -917,14 +999,20 @@ done_3_err:
         size_t result_limit = arng && arng->isLimited ? arng->limit : DEFAULT_LIMIT;
         size_t result_offset = arng && arng->isLimited ? arng->offset : 0;
 
-        // TODO: Serialize sort parameters
-        const char *sort_params = NULL;
+        // Get SORTBY parameters for cache key differentiation (includes direction)
+        const char *sort_params = AREQ_GetSortParams(req);
+
+        // Get RETURN fields for cache key differentiation
+        const char **return_fields = NULL;
+        size_t return_fields_count = 0;
+        AREQ_GetReturnFieldNames(req, &return_fields, &return_fields_count);
 
         uint64_t revision = sctx->spec->revision;
 
         QueryCacheIntegration_Store(
           index_name, query_string, result_limit, result_offset,
-          sort_params, revision, (const uint8_t *)serialized_cache, serialized_cache_size
+          sort_params, return_fields, return_fields_count,
+          revision, (const uint8_t *)serialized_cache, serialized_cache_size
         );
       }
       rm_free(serialized_cache);

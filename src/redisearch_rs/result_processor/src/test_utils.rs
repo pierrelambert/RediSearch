@@ -123,6 +123,7 @@ impl Chain {
     /// The caller has to ensure that the given pointer dereferences to a valid result processor.
     pub unsafe fn push_raw(&mut self, mut result_processor: NonNull<crate::Header>) {
         if let Some(upstream) = self.result_processors.last() {
+            // SAFETY: result_processor is valid per caller's contract.
             unsafe {
                 result_processor.as_mut().upstream = upstream.as_ptr();
             }
@@ -130,7 +131,7 @@ impl Chain {
 
         self.result_processors.push(result_processor);
 
-        // Safety: ResultProcessorWrapper's layout is compatible with ffi::ResultProcessor.
+        // SAFETY: ResultProcessorWrapper's layout is compatible with ffi::ResultProcessor.
         let result_processor_ptr: *mut ffi::ResultProcessor =
             unsafe { result_processor.cast().as_mut() };
 
@@ -172,10 +173,12 @@ impl Chain {
             ResultProcessorWrapper::<P>::debug_assert_same_type(*ptr);
         }
 
-        // Safety: The assert above ensures this is always of the right type
-        let result_processor =
-            unsafe { Pin::new_unchecked(ptr.cast::<ResultProcessorWrapper<P>>().as_mut()) };
-        let result_processor = result_processor.project();
+        // SAFETY: The assert above ensures this is always of the right type.
+        // Pin::new_unchecked is safe because ptr comes from our push_raw/push methods.
+        let result_processor_pinned =
+            unsafe { Pin::new_unchecked(ptr.cast::<ResultProcessorWrapper<P>>()) };
+        // SAFETY: as_mut is safe because we have unique access to this processor.
+        let result_processor = unsafe { result_processor_pinned.as_mut() }.project();
 
         let cx = Context::new(result_processor.header);
         let result_processor = result_processor.result_processor;
@@ -187,7 +190,10 @@ impl Chain {
 impl Drop for Chain {
     fn drop(&mut self) {
         for mut ptr in self.result_processors.drain(..) {
-            unsafe { (ptr.as_mut().free.unwrap())(ptr.as_ptr()) }
+            // SAFETY: ptr is valid, as_mut is safe because we're in drop and have unique access.
+            let free_fn = unsafe { ptr.as_mut() }.free.unwrap();
+            // SAFETY: free_fn expects a valid pointer to the result processor.
+            unsafe { free_fn(ptr.as_ptr()) };
         }
     }
 }

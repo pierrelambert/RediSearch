@@ -150,14 +150,13 @@ impl QueryCache {
         }
 
         // Evict LRU entry if at capacity
-        if self.cache.len() >= self.max_entries {
-            if let Some(lru_key) = self.lru_queue.pop_front() {
-                if let Some(evicted) = self.cache.remove(&lru_key) {
-                    self.memory_bytes
-                        .fetch_sub(evicted.size_bytes, Ordering::Relaxed);
-                    self.evictions.fetch_add(1, Ordering::Relaxed);
-                }
-            }
+        if self.cache.len() >= self.max_entries
+            && let Some(lru_key) = self.lru_queue.pop_front()
+            && let Some(evicted) = self.cache.remove(&lru_key)
+        {
+            self.memory_bytes
+                .fetch_sub(evicted.size_bytes, Ordering::Relaxed);
+            self.evictions.fetch_add(1, Ordering::Relaxed);
         }
 
         // Insert new entry
@@ -166,7 +165,6 @@ impl QueryCache {
         self.cache.insert(key, result);
         self.lru_queue.push_back(key);
     }
-
 
     /// Clear all entries from the cache.
     pub fn clear(&mut self) {
@@ -204,18 +202,16 @@ impl QueryCache {
         self.max_entries = new_max_entries;
 
         // Evict entries if we're over the new limit
-        while self.cache.len() > new_max_entries {
-            if let Some(lru_key) = self.lru_queue.pop_front() {
-                if let Some(evicted) = self.cache.remove(&lru_key) {
-                    self.memory_bytes
-                        .fetch_sub(evicted.size_bytes, Ordering::Relaxed);
-                    self.evictions.fetch_add(1, Ordering::Relaxed);
-                }
-            }
+        while self.cache.len() > new_max_entries
+            && let Some(lru_key) = self.lru_queue.pop_front()
+            && let Some(evicted) = self.cache.remove(&lru_key)
+        {
+            self.memory_bytes
+                .fetch_sub(evicted.size_bytes, Ordering::Relaxed);
+            self.evictions.fetch_add(1, Ordering::Relaxed);
         }
     }
 }
-
 
 /// Opaque wrapper for FFI.
 pub mod opaque {
@@ -255,7 +251,7 @@ pub mod opaque {
         /// - `ptr` must not have been freed
         /// - No mutable references to the same cache must exist
         #[must_use]
-        pub unsafe fn from_opaque_ref<'a>(ptr: *const OpaqueQueryCache) -> &'a Self {
+        pub const unsafe fn from_opaque_ref<'a>(ptr: *const OpaqueQueryCache) -> &'a Self {
             // SAFETY: Caller guarantees ptr is valid and no mutable refs exist
             unsafe { &*ptr.cast() }
         }
@@ -274,7 +270,6 @@ pub mod opaque {
         }
     }
 }
-
 
 #[cfg(test)]
 mod tests {

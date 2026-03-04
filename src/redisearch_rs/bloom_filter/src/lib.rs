@@ -76,7 +76,7 @@ impl BloomFilter {
             .ceil()
             .max(1.0) as u32;
 
-        let num_u64s = (num_bits + 63) / 64;
+        let num_u64s = num_bits.div_ceil(64);
 
         Self {
             bits: vec![0u64; num_u64s],
@@ -147,13 +147,12 @@ mod tests {
     #[test]
     fn test_basic_operations() {
         let mut filter = BloomFilter::new(100, 0.01);
-        
+
         filter.insert(b"hello");
         filter.insert(b"world");
-        
+
         assert!(filter.contains(b"hello"));
         assert!(filter.contains(b"world"));
         assert_eq!(filter.count(), 2);
     }
 }
-

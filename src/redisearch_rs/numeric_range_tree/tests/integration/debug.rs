@@ -326,8 +326,14 @@ fn test_debug_summary_none_has_same_keys_as_default() {
     let tree = NumericRangeTree::new(false);
 
     // SAFETY: `ctx` is a mock pointer — `redis_mock` intercepts all Redis module API calls.
-    let reply_default = capture_single_reply(|| unsafe { debug::debug_summary(ctx, Some(&tree)) });
-    let reply_none = capture_single_reply(|| unsafe { debug::debug_summary(ctx, None) });
+    let reply_default = capture_single_reply(|| {
+        // SAFETY: ctx is a valid mock context.
+        unsafe { debug::debug_summary(ctx, Some(&tree)) }
+    });
+    let reply_none = capture_single_reply(|| {
+        // SAFETY: ctx is a valid mock context.
+        unsafe { debug::debug_summary(ctx, None) }
+    });
 
     // Extract keys (string elements at even indices in the flat array).
     fn keys(reply: &ReplyValue) -> Vec<&str> {
@@ -352,9 +358,14 @@ fn test_debug_dump_tree_none_has_same_keys_as_default() {
     let tree = NumericRangeTree::new(false);
 
     // SAFETY: `ctx` is a mock pointer — `redis_mock` intercepts all Redis module API calls.
-    let reply_default =
-        capture_single_reply(|| unsafe { debug::debug_dump_tree(ctx, Some(&tree), true) });
-    let reply_none = capture_single_reply(|| unsafe { debug::debug_dump_tree(ctx, None, true) });
+    let reply_default = capture_single_reply(|| {
+        // SAFETY: ctx is a valid mock context.
+        unsafe { debug::debug_dump_tree(ctx, Some(&tree), true) }
+    });
+    let reply_none = capture_single_reply(|| {
+        // SAFETY: ctx is a valid mock context.
+        unsafe { debug::debug_dump_tree(ctx, None, true) }
+    });
 
     // Extract top-level map keys.
     fn keys(reply: &ReplyValue) -> Vec<&str> {

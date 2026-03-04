@@ -43,7 +43,10 @@ use std::ffi::CStr;
 /// }
 /// ```
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn DateTime_ParseISO8601(str: *const c_char, out_timestamp: *mut i64) -> c_int {
+pub unsafe extern "C" fn DateTime_ParseISO8601(
+    str: *const c_char,
+    out_timestamp: *mut i64,
+) -> c_int {
     // Check for null pointers
     if str.is_null() || out_timestamp.is_null() {
         return -1;

@@ -87,9 +87,7 @@ pub fn parse_iso8601(s: &str) -> Result<i64, ParseError> {
     // Try parsing as date only (YYYY-MM-DD)
     if let Ok(date) = NaiveDate::parse_from_str(s, "%Y-%m-%d") {
         // Convert to midnight UTC
-        let datetime = date
-            .and_hms_opt(0, 0, 0)
-            .ok_or(ParseError::InvalidFormat)?;
+        let datetime = date.and_hms_opt(0, 0, 0).ok_or(ParseError::InvalidFormat)?;
         let utc_datetime = Utc.from_utc_datetime(&datetime);
         return Ok(utc_datetime.timestamp());
     }
