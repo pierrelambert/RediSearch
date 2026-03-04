@@ -137,9 +137,17 @@ mod tests {
     }
 
     #[test]
-    fn test_where_equality() {
+    fn test_where_string_equality() {
         let result = translate("SELECT * FROM idx WHERE status = 'active'").unwrap();
-        assert_eq!(result.query_string, "@status:active");
+        // String equality uses TAG syntax with curly braces for exact match
+        assert_eq!(result.query_string, "@status:{active}");
+    }
+
+    #[test]
+    fn test_where_numeric_equality() {
+        let result = translate("SELECT * FROM idx WHERE count = 42").unwrap();
+        // Numeric equality uses range syntax [n n]
+        assert_eq!(result.query_string, "@count:[42 42]");
     }
 
     #[test]
