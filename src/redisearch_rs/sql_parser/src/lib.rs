@@ -425,6 +425,49 @@ mod tests {
         assert!(result.arguments.contains(&"FILTER".to_string()));
     }
 
+    #[test]
+    fn test_having_with_alias() {
+        // When SELECT uses an alias for COUNT(*), HAVING should reference that alias
+        let result = translate(
+            "SELECT category, COUNT(*) as cnt FROM idx GROUP BY category HAVING COUNT(*) > 3",
+        )
+        .unwrap();
+
+        assert_eq!(result.command, Command::Aggregate);
+        assert!(result.arguments.contains(&"FILTER".to_string()));
+        // The FILTER should reference @cnt (the alias), not @count (the default name)
+        let filter_idx = result
+            .arguments
+            .iter()
+            .position(|a| a == "FILTER")
+            .expect("FILTER should be present");
+        let filter_expr = &result.arguments[filter_idx + 1];
+        assert_eq!(
+            filter_expr, "@cnt>3",
+            "HAVING should reference the alias 'cnt', not 'count'"
+        );
+    }
+
+    #[test]
+    fn test_having_without_alias() {
+        // When SELECT has no alias, HAVING should use the default name
+        let result =
+            translate("SELECT category, COUNT(*) FROM idx GROUP BY category HAVING COUNT(*) > 5")
+                .unwrap();
+
+        assert_eq!(result.command, Command::Aggregate);
+        let filter_idx = result
+            .arguments
+            .iter()
+            .position(|a| a == "FILTER")
+            .expect("FILTER should be present");
+        let filter_expr = &result.arguments[filter_idx + 1];
+        assert_eq!(
+            filter_expr, "@count>5",
+            "HAVING should reference the default name 'count'"
+        );
+    }
+
     // Vector search tests - note: <-> operator parsing depends on sqlparser support
     // These tests verify the AST and translation when vector search is present
     #[test]
@@ -702,48 +745,56 @@ mod tests {
     }
 
     // Multiple ORDER BY integration tests
+    // FT.SEARCH only supports single ORDER BY column
     #[test]
-    fn test_order_by_multiple_columns_integration() {
-        let result = translate("SELECT * FROM products ORDER BY category ASC, price DESC").unwrap();
-        assert_eq!(result.command, Command::Search);
-        // SORTBY category ASC price DESC
-        let args = result.arguments;
-        assert!(args.contains(&"SORTBY".to_string()));
-        // Check order: SORTBY category ASC price DESC
-        let sortby_idx = args.iter().position(|x| x == "SORTBY").unwrap();
-        assert_eq!(args[sortby_idx + 1], "category");
-        assert_eq!(args[sortby_idx + 2], "ASC");
-        assert_eq!(args[sortby_idx + 3], "price");
-        assert_eq!(args[sortby_idx + 4], "DESC");
+    fn test_order_by_multiple_columns_search_rejected() {
+        let result = translate("SELECT * FROM products ORDER BY category ASC, price DESC");
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err
+            .message
+            .contains("Multiple ORDER BY columns are not supported by FT.SEARCH"));
     }
 
     #[test]
-    fn test_order_by_three_columns_integration() {
+    fn test_order_by_three_columns_search_rejected() {
         let result =
-            translate("SELECT * FROM idx ORDER BY category ASC, price DESC, name ASC").unwrap();
-        let args = result.arguments;
-        let sortby_idx = args.iter().position(|x| x == "SORTBY").unwrap();
-        assert_eq!(args[sortby_idx + 1], "category");
-        assert_eq!(args[sortby_idx + 2], "ASC");
-        assert_eq!(args[sortby_idx + 3], "price");
-        assert_eq!(args[sortby_idx + 4], "DESC");
-        assert_eq!(args[sortby_idx + 5], "name");
-        assert_eq!(args[sortby_idx + 6], "ASC");
+            translate("SELECT * FROM idx ORDER BY category ASC, price DESC, name ASC");
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err
+            .message
+            .contains("Multiple ORDER BY columns are not supported by FT.SEARCH"));
     }
 
     #[test]
-    fn test_order_by_with_where_and_limit() {
+    fn test_order_by_multiple_with_where_and_limit_search_rejected() {
         let result = translate(
             "SELECT * FROM products WHERE status = 'active' ORDER BY price DESC, name ASC LIMIT 10",
+        );
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err
+            .message
+            .contains("Multiple ORDER BY columns are not supported by FT.SEARCH"));
+    }
+
+    // FT.AGGREGATE supports multiple ORDER BY columns
+    #[test]
+    fn test_order_by_multiple_columns_aggregate_integration() {
+        let result = translate(
+            "SELECT category, COUNT(*) AS cnt FROM products GROUP BY category ORDER BY category ASC, cnt DESC",
         )
         .unwrap();
-        assert_eq!(result.query_string, "@status:{active}");
+        assert_eq!(result.command, Command::Aggregate);
         let args = result.arguments;
+        assert!(args.contains(&"SORTBY".to_string()));
+        // SORTBY nargs @field1 ASC @field2 DESC
         let sortby_idx = args.iter().position(|x| x == "SORTBY").unwrap();
-        assert_eq!(args[sortby_idx + 1], "price");
-        assert_eq!(args[sortby_idx + 2], "DESC");
-        assert_eq!(args[sortby_idx + 3], "name");
-        assert_eq!(args[sortby_idx + 4], "ASC");
-        assert!(args.contains(&"LIMIT".to_string()));
+        assert_eq!(args[sortby_idx + 1], "4"); // nargs = 2 columns * 2
+        assert_eq!(args[sortby_idx + 2], "@category");
+        assert_eq!(args[sortby_idx + 3], "ASC");
+        assert_eq!(args[sortby_idx + 4], "@cnt");
+        assert_eq!(args[sortby_idx + 5], "DESC");
     }
 }

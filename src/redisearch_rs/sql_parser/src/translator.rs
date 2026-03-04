@@ -235,12 +235,21 @@ fn build_arguments(query: &SelectQuery, command: Command) -> Result<Vec<String>,
             }
 
             // SORTBY clause (only if not using vector search)
+            // FT.SEARCH only supports single-column SORTBY
             if query.vector_search.is_none()
                 && let Some(order_by) = &query.order_by
             {
+                if order_by.columns.len() > 1 {
+                    return Err(SqlError::unsupported(
+                        "Multiple ORDER BY columns are not supported by FT.SEARCH",
+                    )
+                    .with_suggestion(
+                        "Use a single ORDER BY column, or use GROUP BY to generate FT.AGGREGATE which supports multiple sort columns",
+                    ));
+                }
                 args.push("SORTBY".to_string());
-                // Add all columns: field1 ASC field2 DESC ...
-                for col in &order_by.columns {
+                // Add single column: field ASC/DESC
+                if let Some(col) = order_by.columns.first() {
                     args.push(col.field.clone());
                     args.push(col.direction.to_string());
                 }
@@ -322,7 +331,7 @@ fn build_arguments(query: &SelectQuery, command: Command) -> Result<Vec<String>,
 
             // HAVING translates to FILTER
             if let Some(having) = &query.having {
-                let filter_expr = translate_having_condition(having)?;
+                let filter_expr = translate_having_condition(having, &query.aggregates)?;
                 args.push("FILTER".to_string());
                 args.push(filter_expr);
             }
@@ -384,37 +393,87 @@ fn build_reduce_clause(agg: &AggregateExpr) -> Vec<String> {
 }
 
 /// Translate HAVING condition to FT.AGGREGATE FILTER expression.
-fn translate_having_condition(condition: &Condition) -> Result<String, SqlError> {
+///
+/// The `aggregates` parameter is used to resolve the field name from the HAVING
+/// condition to the actual alias used in REDUCE clauses. For example, if SELECT has
+/// `COUNT(*) AS cnt` and HAVING has `COUNT(*) > 3`, the parser generates a condition
+/// with field `"count"`, but we need to reference `@cnt` in the FILTER.
+fn translate_having_condition(
+    condition: &Condition,
+    aggregates: &[AggregateExpr],
+) -> Result<String, SqlError> {
     // HAVING conditions in FT.AGGREGATE use @field syntax and comparison operators
     match condition {
         Condition::Equals { field, value } => {
+            let resolved_field = resolve_having_field(field, aggregates);
             let val_str = value.to_rql_string();
-            Ok(format!("@{field}=={val_str}"))
+            Ok(format!("@{resolved_field}=={val_str}"))
         }
         Condition::NotEquals { field, value } => {
+            let resolved_field = resolve_having_field(field, aggregates);
             let val_str = value.to_rql_string();
-            Ok(format!("@{field}!={val_str}"))
+            Ok(format!("@{resolved_field}!={val_str}"))
         }
         Condition::GreaterThan { field, value } => {
+            let resolved_field = resolve_having_field(field, aggregates);
             let val_str = value.to_rql_string();
-            Ok(format!("@{field}>{val_str}"))
+            Ok(format!("@{resolved_field}>{val_str}"))
         }
         Condition::GreaterThanOrEqual { field, value } => {
+            let resolved_field = resolve_having_field(field, aggregates);
             let val_str = value.to_rql_string();
-            Ok(format!("@{field}>={val_str}"))
+            Ok(format!("@{resolved_field}>={val_str}"))
         }
         Condition::LessThan { field, value } => {
+            let resolved_field = resolve_having_field(field, aggregates);
             let val_str = value.to_rql_string();
-            Ok(format!("@{field}<{val_str}"))
+            Ok(format!("@{resolved_field}<{val_str}"))
         }
         Condition::LessThanOrEqual { field, value } => {
+            let resolved_field = resolve_having_field(field, aggregates);
             let val_str = value.to_rql_string();
-            Ok(format!("@{field}<={val_str}"))
+            Ok(format!("@{resolved_field}<={val_str}"))
         }
         _ => Err(SqlError::unsupported(
             "Complex HAVING conditions are not supported",
         )),
     }
+}
+
+/// Resolve a HAVING field name to the actual alias used in REDUCE.
+///
+/// The HAVING clause parser generates field names like "count" or "sum_price" for
+/// aggregate functions. This function matches those names against the SELECT
+/// clause aggregates to find the correct alias.
+fn resolve_having_field<'a>(field: &'a str, aggregates: &'a [AggregateExpr]) -> &'a str {
+    // Try to find a matching aggregate
+    for agg in aggregates {
+        // Generate the default name that extract_having_field would produce
+        let default_name = match &agg.field {
+            Some(f) => format!("{}_{}", agg.function.to_string().to_lowercase(), f),
+            None => agg.function.to_string().to_lowercase(),
+        };
+
+        // If the field matches the default name, return the aggregate's alias
+        if field == default_name {
+            // Return the alias if present, otherwise the default name
+            if let Some(alias) = &agg.alias {
+                return alias.as_str();
+            }
+            // No alias - return the default name that REDUCE will use
+            return field;
+        }
+
+        // Also check if the field directly matches an alias (user used alias in HAVING)
+        if let Some(alias) = &agg.alias {
+            if field == alias {
+                return alias.as_str();
+            }
+        }
+    }
+
+    // No matching aggregate found, return as-is
+    field
 }
 
 #[cfg(test)]
@@ -733,7 +792,7 @@ mod tests {
 
     // Multiple ORDER BY tests
     #[test]
-    fn test_translate_order_by_multiple_columns() {
+    fn test_translate_order_by_multiple_columns_search_rejected() {
         use crate::ast::OrderByColumn;
         let mut query = SelectQuery::new("products");
         query.order_by = Some(OrderBy {
@@ -748,12 +807,47 @@ mod tests {
                 },
             ],
         });
+        // FT.SEARCH does not support multiple ORDER BY columns
+        let result = translate(query);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err
+            .message
+            .contains("Multiple ORDER BY columns are not supported by FT.SEARCH"));
+        assert!(err.suggestion.is_some());
+    }
+
+    #[test]
+    fn test_translate_order_by_multiple_columns_aggregate() {
+        use crate::ast::{AggregateExpr, AggregateFunction, OrderByColumn};
+        let mut query = SelectQuery::new("products");
+        // Add aggregate to trigger FT.AGGREGATE
+        query.aggregates.push(AggregateExpr {
+            function: AggregateFunction::Count,
+            field: None,
+            alias: Some("total".to_string()),
+        });
+        query.order_by = Some(OrderBy {
+            columns: vec![
+                OrderByColumn {
+                    field: "category".to_string(),
+                    direction: crate::ast::SortDirection::Asc,
+                },
+                OrderByColumn {
+                    field: "price".to_string(),
+                    direction: crate::ast::SortDirection::Desc,
+                },
+            ],
+        });
+        // FT.AGGREGATE supports multiple ORDER BY columns
         let result = translate(query).unwrap();
-        // FT.SEARCH: SORTBY field1 ASC field2 DESC
+        assert_eq!(result.command, Command::Aggregate);
+        // SORTBY nargs @field1 ASC @field2 DESC
         assert!(result.arguments.contains(&"SORTBY".to_string()));
-        assert!(result.arguments.contains(&"category".to_string()));
+        assert!(result.arguments.contains(&"4".to_string())); // nargs = 2 columns * 2
+        assert!(result.arguments.contains(&"@category".to_string()));
         assert!(result.arguments.contains(&"ASC".to_string()));
-        assert!(result.arguments.contains(&"price".to_string()));
+        assert!(result.arguments.contains(&"@price".to_string()));
         assert!(result.arguments.contains(&"DESC".to_string()));
     }
 
