@@ -41,7 +41,10 @@ members = [
     "varint_bencher",
     "wildcard",
     "workspace_hack",
-    "idf", "query_cache", "datetime",
+    "idf",
+    "query_cache",
+    "datetime",
+    "sql_parser",
 ]
 
 resolver = "3"
@@ -156,6 +159,8 @@ rmp-serde = "1.3.1"
 rustc-hash = "2.1.1"
 serde = { version = "1.0.228", features = ["derive"] }
 smallvec = "1.15.1"
+sql_parser = { path = "./sql_parser" }
+sqlparser = "0.52"
 strum = { version = "0.27.2", features = ["derive"] }
 syn = "2"
 # need "unstable" for the "default_log_filter" attribute allowing to override the default level (info).

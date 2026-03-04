@@ -48,6 +48,7 @@
 #include "reply.h"
 #include "resp3.h"
 #include "query_error.h"
+#include "sql_command.h"
 #include "coord/rmr/rmr.h"
 #include "shard_window_ratio.h"
 
@@ -1762,6 +1763,8 @@ int RediSearch_InitModuleInternal(RedisModuleCtx *ctx) {
     DEFINE_COMMAND(RS_DEBUG,         NULL,                     RS_READ_ONLY_FLAGS_DEFAULT, RegisterAllDebugCommands,  SUBSCRIBE_SUBCOMMANDS, "admin slow dangerous",                true,             indexOnlyCmdArgs, false),
     DEFINE_COMMAND(RS_SPELL_CHECK,   SpellCheckCommand,        "readonly"                , SetFtSpellcheckInfo,       SET_COMMAND_INFO,      "",                     true,             indexOnlyCmdArgs, true),
     DEFINE_COMMAND(RS_CONFIG,        NULL,                     RS_READ_ONLY_FLAGS_DEFAULT, RegisterConfigSubCommands, SUBSCRIBE_SUBCOMMANDS, "admin",                true,             indexOnlyCmdArgs, false),
+    // SQL command - translates SQL to RQL and dispatches to FT.SEARCH/FT.AGGREGATE
+    DEFINE_COMMAND(RS_SQL_CMD,       SQLCommand,               "readonly"                , NULL,                      NONE,                  "read",                 true,             indexOnlyCmdArgs, false),
   };
 
   if (CreateSearchCommands(ctx, commands, sizeof(commands) / sizeof(commands[0])) != REDISMODULE_OK) {
