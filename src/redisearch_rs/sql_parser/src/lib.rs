@@ -31,6 +31,8 @@
 //! - `field < 100` - Less than
 //! - `field <= 100` - Less than or equal
 //! - `field BETWEEN a AND b` - Inclusive range
+//! - `field IN ('a', 'b', 'c')` - Match any value (strings use TAG syntax)
+//! - `field NOT IN ('a', 'b')` - Exclude values
 //!
 //! ## ORDER BY clause
 //! - `ORDER BY field ASC` - Ascending sort
@@ -224,5 +226,45 @@ mod tests {
         let result = translate("SELECT * FROM idx WHERE price < 100").unwrap();
         assert_eq!(result.query_string, "@price:[-inf (100]");
     }
-}
 
+    // IN clause integration tests
+    #[test]
+    fn test_in_string_values() {
+        let result =
+            translate("SELECT * FROM products WHERE category IN ('electronics', 'accessories')")
+                .unwrap();
+        assert_eq!(result.query_string, "@category:{electronics|accessories}");
+    }
+
+    #[test]
+    fn test_not_in_string_values() {
+        let result =
+            translate("SELECT * FROM products WHERE status NOT IN ('deleted', 'archived')")
+                .unwrap();
+        assert_eq!(result.query_string, "-@status:{deleted|archived}");
+    }
+
+    #[test]
+    fn test_in_numeric_values() {
+        let result = translate("SELECT * FROM products WHERE price IN (10, 20, 30)").unwrap();
+        assert_eq!(
+            result.query_string,
+            "(@price:[10 10]|@price:[20 20]|@price:[30 30])"
+        );
+    }
+
+    #[test]
+    fn test_not_in_numeric_values() {
+        let result = translate("SELECT * FROM products WHERE count NOT IN (0, 1)").unwrap();
+        assert_eq!(result.query_string, "-(@count:[0 0]|@count:[1 1])");
+    }
+
+    #[test]
+    fn test_in_combined_with_other_conditions() {
+        let result = translate("SELECT * FROM products WHERE category IN ('electronics', 'accessories') AND price > 100").unwrap();
+        assert_eq!(
+            result.query_string,
+            "@category:{electronics|accessories} @price:[(100 +inf]"
+        );
+    }
+}

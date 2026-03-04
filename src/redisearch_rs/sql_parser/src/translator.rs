@@ -76,6 +76,43 @@ fn translate_condition(condition: &Condition) -> Result<String, SqlError> {
             let high_str = high.to_rql_string();
             Ok(format!("@{field}:[{low_str} {high_str}]"))
         }
+        Condition::In {
+            field,
+            values,
+            negated,
+        } => {
+            // Check if values are strings or numbers
+            let all_strings = values.iter().all(|v| matches!(v, Value::String(_)));
+
+            let prefix = if *negated { "-" } else { "" };
+
+            if all_strings {
+                // TAG syntax for strings: @field:{val1|val2|val3}
+                let values_str = values
+                    .iter()
+                    .map(|v| v.to_rql_string())
+                    .collect::<Vec<_>>()
+                    .join("|");
+                Ok(format!("{prefix}@{field}:{{{values_str}}}"))
+            } else {
+                // Numeric IN: use OR of exact matches
+                // @field:[n1 n1] | @field:[n2 n2] | ...
+                let parts: Vec<String> = values
+                    .iter()
+                    .map(|v| {
+                        let n_str = v.to_rql_string();
+                        format!("@{field}:[{n_str} {n_str}]")
+                    })
+                    .collect();
+
+                if *negated {
+                    // For NOT IN with numbers, negate the whole expression
+                    Ok(format!("-({})", parts.join("|")))
+                } else {
+                    Ok(format!("({})", parts.join("|")))
+                }
+            }
+        }
     }
 }
 
@@ -188,5 +225,103 @@ mod tests {
         assert!(result.arguments.contains(&"RETURN".to_string()));
         assert!(result.arguments.contains(&"2".to_string()));
     }
-}
 
+    // IN clause translation tests
+    #[test]
+    fn test_translate_in_strings() {
+        let query = SelectQuery {
+            fields: vec![],
+            index_name: "idx".to_string(),
+            conditions: vec![Condition::In {
+                field: "category".to_string(),
+                values: vec![
+                    Value::String("electronics".to_string()),
+                    Value::String("accessories".to_string()),
+                ],
+                negated: false,
+            }],
+            order_by: None,
+            limit: None,
+        };
+        let result = translate(query).unwrap();
+        assert_eq!(result.query_string, "@category:{electronics|accessories}");
+    }
+
+    #[test]
+    fn test_translate_not_in_strings() {
+        let query = SelectQuery {
+            fields: vec![],
+            index_name: "idx".to_string(),
+            conditions: vec![Condition::In {
+                field: "status".to_string(),
+                values: vec![
+                    Value::String("deleted".to_string()),
+                    Value::String("archived".to_string()),
+                ],
+                negated: true,
+            }],
+            order_by: None,
+            limit: None,
+        };
+        let result = translate(query).unwrap();
+        assert_eq!(result.query_string, "-@status:{deleted|archived}");
+    }
+
+    #[test]
+    fn test_translate_in_numbers() {
+        let query = SelectQuery {
+            fields: vec![],
+            index_name: "idx".to_string(),
+            conditions: vec![Condition::In {
+                field: "price".to_string(),
+                values: vec![
+                    Value::Number(10.0),
+                    Value::Number(20.0),
+                    Value::Number(30.0),
+                ],
+                negated: false,
+            }],
+            order_by: None,
+            limit: None,
+        };
+        let result = translate(query).unwrap();
+        assert_eq!(
+            result.query_string,
+            "(@price:[10 10]|@price:[20 20]|@price:[30 30])"
+        );
+    }
+
+    #[test]
+    fn test_translate_not_in_numbers() {
+        let query = SelectQuery {
+            fields: vec![],
+            index_name: "idx".to_string(),
+            conditions: vec![Condition::In {
+                field: "count".to_string(),
+                values: vec![Value::Number(1.0), Value::Number(2.0)],
+                negated: true,
+            }],
+            order_by: None,
+            limit: None,
+        };
+        let result = translate(query).unwrap();
+        assert_eq!(result.query_string, "-(@count:[1 1]|@count:[2 2])");
+    }
+
+    #[test]
+    fn test_translate_in_single_value() {
+        let query = SelectQuery {
+            fields: vec![],
+            index_name: "idx".to_string(),
+            conditions: vec![Condition::In {
+                field: "type".to_string(),
+                values: vec![Value::String("premium".to_string())],
+                negated: false,
+            }],
+            order_by: None,
+            limit: None,
+        };
+        let result = translate(query).unwrap();
+        assert_eq!(result.query_string, "@type:{premium}");
+    }
+}

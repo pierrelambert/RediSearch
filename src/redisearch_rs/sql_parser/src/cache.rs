@@ -15,8 +15,8 @@
 use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, VecDeque};
 use std::hash::{Hash, Hasher};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::RwLock;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::{SqlError, Translation, translate};
 
@@ -200,7 +200,10 @@ pub fn translate_cached(sql: &str) -> Result<Translation, SqlError> {
     {
         let mut cache_guard = CACHE.write().expect("Cache lock poisoned");
         ensure_cache_initialized(&mut cache_guard);
-        cache_guard.as_mut().unwrap().insert(hash, translation.clone());
+        cache_guard
+            .as_mut()
+            .unwrap()
+            .insert(hash, translation.clone());
     }
 
     CACHE_MISSES.fetch_add(1, Ordering::Relaxed);
