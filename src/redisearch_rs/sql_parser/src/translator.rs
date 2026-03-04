@@ -465,10 +465,10 @@ fn resolve_having_field<'a>(field: &'a str, aggregates: &'a [AggregateExpr]) -> 
         }
 
         // Also check if the field directly matches an alias (user used alias in HAVING)
-        if let Some(alias) = &agg.alias {
-            if field == alias {
-                return alias.as_str();
-            }
+        if let Some(alias) = &agg.alias
+            && field == alias
+        {
+            return alias.as_str();
         }
     }
 
@@ -811,9 +811,10 @@ mod tests {
         let result = translate(query);
         assert!(result.is_err());
         let err = result.unwrap_err();
-        assert!(err
-            .message
-            .contains("Multiple ORDER BY columns are not supported by FT.SEARCH"));
+        assert!(
+            err.message
+                .contains("Multiple ORDER BY columns are not supported by FT.SEARCH")
+        );
         assert!(err.suggestion.is_some());
     }
 

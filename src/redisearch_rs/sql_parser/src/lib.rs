@@ -468,6 +468,27 @@ mod tests {
         );
     }
 
+    #[test]
+    fn test_having_with_sum_alias() {
+        // Test HAVING with SUM and an alias
+        let result = translate(
+            "SELECT category, SUM(price) as total FROM idx GROUP BY category HAVING SUM(price) > 100",
+        )
+        .unwrap();
+
+        assert_eq!(result.command, Command::Aggregate);
+        let filter_idx = result
+            .arguments
+            .iter()
+            .position(|a| a == "FILTER")
+            .expect("FILTER should be present");
+        let filter_expr = &result.arguments[filter_idx + 1];
+        assert_eq!(
+            filter_expr, "@total>100",
+            "HAVING should reference the alias 'total', not 'sum_price'"
+        );
+    }
+
     // Vector search tests - note: <-> operator parsing depends on sqlparser support
     // These tests verify the AST and translation when vector search is present
     #[test]
@@ -751,20 +772,21 @@ mod tests {
         let result = translate("SELECT * FROM products ORDER BY category ASC, price DESC");
         assert!(result.is_err());
         let err = result.unwrap_err();
-        assert!(err
-            .message
-            .contains("Multiple ORDER BY columns are not supported by FT.SEARCH"));
+        assert!(
+            err.message
+                .contains("Multiple ORDER BY columns are not supported by FT.SEARCH")
+        );
     }
 
     #[test]
     fn test_order_by_three_columns_search_rejected() {
-        let result =
-            translate("SELECT * FROM idx ORDER BY category ASC, price DESC, name ASC");
+        let result = translate("SELECT * FROM idx ORDER BY category ASC, price DESC, name ASC");
         assert!(result.is_err());
         let err = result.unwrap_err();
-        assert!(err
-            .message
-            .contains("Multiple ORDER BY columns are not supported by FT.SEARCH"));
+        assert!(
+            err.message
+                .contains("Multiple ORDER BY columns are not supported by FT.SEARCH")
+        );
     }
 
     #[test]
@@ -774,9 +796,10 @@ mod tests {
         );
         assert!(result.is_err());
         let err = result.unwrap_err();
-        assert!(err
-            .message
-            .contains("Multiple ORDER BY columns are not supported by FT.SEARCH"));
+        assert!(
+            err.message
+                .contains("Multiple ORDER BY columns are not supported by FT.SEARCH")
+        );
     }
 
     // FT.AGGREGATE supports multiple ORDER BY columns
@@ -798,3 +821,6 @@ mod tests {
         assert_eq!(args[sortby_idx + 5], "DESC");
     }
 }
+
+#[cfg(test)]
+mod debug_test;
