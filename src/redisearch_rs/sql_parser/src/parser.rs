@@ -165,6 +165,28 @@ fn parse_expression(expr: &Expr, conditions: &mut Vec<Condition>) -> Result<(), 
         Expr::Between { negated: true, .. } => Err(SqlError::unsupported(
             "NOT BETWEEN is not supported in Phase 1",
         )),
+        Expr::InList {
+            expr,
+            list,
+            negated,
+        } => {
+            let field = extract_identifier(expr)?;
+            let values: Vec<Value> = list
+                .iter()
+                .map(extract_value)
+                .collect::<Result<Vec<_>, _>>()?;
+
+            if values.is_empty() {
+                return Err(SqlError::syntax("IN clause requires at least one value"));
+            }
+
+            conditions.push(Condition::In {
+                field,
+                values,
+                negated: *negated,
+            });
+            Ok(())
+        }
         Expr::Nested(inner) => parse_expression(inner, conditions),
         _ => Err(SqlError::unsupported(format!(
             "Unsupported expression type: {expr:?}"
@@ -625,5 +647,86 @@ mod tests {
         assert_eq!(query.index_name, "products");
         assert_eq!(query.fields.len(), 2);
         assert!(query.order_by.is_some());
+    }
+
+    // IN clause tests
+    #[test]
+    fn test_parse_in_string_values() {
+        let query =
+            parse("SELECT * FROM idx WHERE category IN ('electronics', 'accessories')").unwrap();
+        assert_eq!(query.conditions.len(), 1);
+        match &query.conditions[0] {
+            Condition::In {
+                field,
+                values,
+                negated,
+            } => {
+                assert_eq!(field, "category");
+                assert_eq!(values.len(), 2);
+                assert!(!negated);
+                assert!(matches!(&values[0], Value::String(s) if s == "electronics"));
+                assert!(matches!(&values[1], Value::String(s) if s == "accessories"));
+            }
+            _ => panic!("Expected In condition"),
+        }
+    }
+
+    #[test]
+    fn test_parse_in_numeric_values() {
+        let query = parse("SELECT * FROM idx WHERE price IN (10, 20, 30)").unwrap();
+        assert_eq!(query.conditions.len(), 1);
+        match &query.conditions[0] {
+            Condition::In {
+                field,
+                values,
+                negated,
+            } => {
+                assert_eq!(field, "price");
+                assert_eq!(values.len(), 3);
+                assert!(!negated);
+                assert!(matches!(&values[0], Value::Number(n) if *n == 10.0));
+                assert!(matches!(&values[1], Value::Number(n) if *n == 20.0));
+                assert!(matches!(&values[2], Value::Number(n) if *n == 30.0));
+            }
+            _ => panic!("Expected In condition"),
+        }
+    }
+
+    #[test]
+    fn test_parse_not_in() {
+        let query = parse("SELECT * FROM idx WHERE status NOT IN ('deleted', 'archived')").unwrap();
+        assert_eq!(query.conditions.len(), 1);
+        match &query.conditions[0] {
+            Condition::In {
+                field,
+                values,
+                negated,
+            } => {
+                assert_eq!(field, "status");
+                assert_eq!(values.len(), 2);
+                assert!(negated);
+            }
+            _ => panic!("Expected In condition"),
+        }
+    }
+
+    #[test]
+    fn test_parse_in_single_value() {
+        let query = parse("SELECT * FROM idx WHERE type IN ('premium')").unwrap();
+        match &query.conditions[0] {
+            Condition::In { values, .. } => {
+                assert_eq!(values.len(), 1);
+            }
+            _ => panic!("Expected In condition"),
+        }
+    }
+
+    #[test]
+    fn test_parse_in_with_and() {
+        let query =
+            parse("SELECT * FROM idx WHERE category IN ('a', 'b') AND status = 'active'").unwrap();
+        assert_eq!(query.conditions.len(), 2);
+        assert!(matches!(&query.conditions[0], Condition::In { .. }));
+        assert!(matches!(&query.conditions[1], Condition::Equals { .. }));
     }
 }
