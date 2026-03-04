@@ -124,3 +124,196 @@ pub struct Limit {
     pub offset: u64,
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Condition::field() tests
+    #[test]
+    fn test_condition_field_equals() {
+        let cond = Condition::Equals {
+            field: "status".to_string(),
+            value: Value::String("active".to_string()),
+        };
+        assert_eq!(cond.field(), "status");
+    }
+
+    #[test]
+    fn test_condition_field_greater_than() {
+        let cond = Condition::GreaterThan {
+            field: "price".to_string(),
+            value: Value::Number(100.0),
+        };
+        assert_eq!(cond.field(), "price");
+    }
+
+    #[test]
+    fn test_condition_field_greater_than_or_equal() {
+        let cond = Condition::GreaterThanOrEqual {
+            field: "count".to_string(),
+            value: Value::Number(5.0),
+        };
+        assert_eq!(cond.field(), "count");
+    }
+
+    #[test]
+    fn test_condition_field_less_than() {
+        let cond = Condition::LessThan {
+            field: "age".to_string(),
+            value: Value::Number(18.0),
+        };
+        assert_eq!(cond.field(), "age");
+    }
+
+    #[test]
+    fn test_condition_field_less_than_or_equal() {
+        let cond = Condition::LessThanOrEqual {
+            field: "rating".to_string(),
+            value: Value::Number(5.0),
+        };
+        assert_eq!(cond.field(), "rating");
+    }
+
+    #[test]
+    fn test_condition_field_between() {
+        let cond = Condition::Between {
+            field: "price".to_string(),
+            low: Value::Number(10.0),
+            high: Value::Number(100.0),
+        };
+        assert_eq!(cond.field(), "price");
+    }
+
+    // Value::to_rql_string() tests
+    #[test]
+    fn test_value_to_rql_string_string() {
+        let val = Value::String("hello".to_string());
+        assert_eq!(val.to_rql_string(), "hello");
+    }
+
+    #[test]
+    fn test_value_to_rql_string_integer() {
+        let val = Value::Number(42.0);
+        assert_eq!(val.to_rql_string(), "42");
+    }
+
+    #[test]
+    fn test_value_to_rql_string_float() {
+        let val = Value::Number(3.14);
+        assert_eq!(val.to_rql_string(), "3.14");
+    }
+
+    #[test]
+    fn test_value_to_rql_string_negative_integer() {
+        let val = Value::Number(-10.0);
+        assert_eq!(val.to_rql_string(), "-10");
+    }
+
+    #[test]
+    fn test_value_to_rql_string_negative_float() {
+        let val = Value::Number(-2.5);
+        assert_eq!(val.to_rql_string(), "-2.5");
+    }
+
+    #[test]
+    fn test_value_to_rql_string_zero() {
+        let val = Value::Number(0.0);
+        assert_eq!(val.to_rql_string(), "0");
+    }
+
+    #[test]
+    fn test_value_to_rql_string_large_integer() {
+        let val = Value::Number(1_000_000.0);
+        assert_eq!(val.to_rql_string(), "1000000");
+    }
+
+    // SortDirection Display tests
+    #[test]
+    fn test_sort_direction_display_asc() {
+        assert_eq!(format!("{}", SortDirection::Asc), "ASC");
+    }
+
+    #[test]
+    fn test_sort_direction_display_desc() {
+        assert_eq!(format!("{}", SortDirection::Desc), "DESC");
+    }
+
+    // SelectQuery tests
+    #[test]
+    fn test_select_query_new() {
+        let query = SelectQuery {
+            fields: vec!["name".to_string(), "price".to_string()],
+            index_name: "products".to_string(),
+            conditions: vec![],
+            order_by: Some(OrderBy {
+                field: "price".to_string(),
+                direction: SortDirection::Desc,
+            }),
+            limit: Some(Limit {
+                count: 10,
+                offset: 5,
+            }),
+        };
+        assert_eq!(query.fields.len(), 2);
+        assert_eq!(query.index_name, "products");
+        assert!(query.conditions.is_empty());
+        assert!(query.order_by.is_some());
+        assert!(query.limit.is_some());
+    }
+
+    // Clone tests
+    #[test]
+    fn test_condition_clone() {
+        let cond = Condition::Equals {
+            field: "test".to_string(),
+            value: Value::Number(1.0),
+        };
+        let cloned = cond.clone();
+        assert_eq!(cond.field(), cloned.field());
+    }
+
+    #[test]
+    fn test_value_clone() {
+        let val = Value::String("test".to_string());
+        let cloned = val.clone();
+        assert_eq!(val.to_rql_string(), cloned.to_rql_string());
+    }
+
+    #[test]
+    fn test_order_by_clone() {
+        let ob = OrderBy {
+            field: "price".to_string(),
+            direction: SortDirection::Asc,
+        };
+        let cloned = ob.clone();
+        assert_eq!(ob.field, cloned.field);
+        assert_eq!(ob.direction, cloned.direction);
+    }
+
+    #[test]
+    fn test_limit_clone() {
+        let limit = Limit {
+            count: 10,
+            offset: 5,
+        };
+        let cloned = limit;
+        assert_eq!(limit.count, cloned.count);
+        assert_eq!(limit.offset, cloned.offset);
+    }
+
+    #[test]
+    fn test_select_query_clone() {
+        let query = SelectQuery {
+            fields: vec!["name".to_string()],
+            index_name: "idx".to_string(),
+            conditions: vec![Condition::Equals {
+                field: "x".to_string(),
+                value: Value::Number(1.0),
+            }],
+            order_by: None,
+            limit: None,
+        };
+        let cloned = query.clone();
+        assert_eq!(query.index_name, cloned.index_name);
+    }
+}

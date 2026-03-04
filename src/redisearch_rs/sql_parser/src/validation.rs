@@ -97,5 +97,50 @@ mod tests {
         let result = validate_query(&query);
         assert!(result.is_ok());
     }
-}
 
+    #[test]
+    fn test_validate_query_too_large() {
+        // Create a query larger than MAX_QUERY_SIZE (64KB)
+        let large_query = "x".repeat(MAX_QUERY_SIZE + 1);
+        let result = validate_query_string(&large_query);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.message.contains("exceeds maximum size"));
+    }
+
+    #[test]
+    fn test_validate_query_at_max_size() {
+        // Query exactly at max size should be valid
+        let max_query = "x".repeat(MAX_QUERY_SIZE);
+        let result = validate_query_string(&max_query);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_index_name_special_chars() {
+        let query = SelectQuery {
+            fields: vec![],
+            index_name: "my@index".to_string(),
+            conditions: vec![],
+            order_by: None,
+            limit: None,
+        };
+        let result = validate_query(&query);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.message.contains("invalid characters"));
+    }
+
+    #[test]
+    fn test_validate_index_name_with_space() {
+        let query = SelectQuery {
+            fields: vec![],
+            index_name: "my index".to_string(),
+            conditions: vec![],
+            order_by: None,
+            limit: None,
+        };
+        let result = validate_query(&query);
+        assert!(result.is_err());
+    }
+}
