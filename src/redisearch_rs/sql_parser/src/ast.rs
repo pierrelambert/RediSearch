@@ -230,6 +230,8 @@ pub enum Condition {
     IsNull { field: String, negated: bool },
     /// OR expression: combines conditions with OR
     Or(Box<Condition>, Box<Condition>),
+    /// NOT expression: negates a condition
+    Not(Box<Condition>),
 }
 
 impl Condition {
@@ -248,6 +250,7 @@ impl Condition {
             | Self::Like { field, .. }
             | Self::IsNull { field, .. } => field,
             Self::Or(left, _) => left.field(),
+            Self::Not(inner) => inner.field(),
         }
     }
 }
@@ -278,13 +281,37 @@ impl Value {
     }
 }
 
-/// ORDER BY clause.
+/// A single ORDER BY column with direction.
 #[derive(Debug, Clone)]
-pub struct OrderBy {
+pub struct OrderByColumn {
     /// Field to sort by.
     pub field: String,
     /// Sort direction.
     pub direction: SortDirection,
+}
+
+/// ORDER BY clause supporting multiple columns.
+#[derive(Debug, Clone)]
+pub struct OrderBy {
+    /// Columns to sort by, in order of precedence.
+    pub columns: Vec<OrderByColumn>,
+}
+
+impl OrderBy {
+    /// Create a new OrderBy with a single column.
+    pub fn single(field: impl Into<String>, direction: SortDirection) -> Self {
+        Self {
+            columns: vec![OrderByColumn {
+                field: field.into(),
+                direction,
+            }],
+        }
+    }
+
+    /// Get the first column (for backwards compatibility and simple cases).
+    pub fn first(&self) -> Option<&OrderByColumn> {
+        self.columns.first()
+    }
 }
 
 /// Sort direction for ORDER BY.
