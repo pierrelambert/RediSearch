@@ -18,7 +18,7 @@ use sqlparser::parser::Parser;
 
 use crate::ast::{
     AggregateExpr, AggregateFunction, Condition, DistanceMetric, GroupBy, HybridSearch, Limit,
-    OrderBy, SelectField, SelectQuery, SortDirection, Value, VectorSearch,
+    OrderBy, OrderByColumn, SelectField, SelectQuery, SortDirection, Value, VectorSearch,
 };
 use crate::error::SqlError;
 use sqlparser::ast::{Distinct, FunctionArg, FunctionArgExpr, FunctionArguments, GroupByExpr};
@@ -581,6 +581,23 @@ fn parse_expression(expr: &Expr, conditions: &mut Vec<Condition>) -> Result<(), 
                 negated: true,
             });
             Ok(())
+        }
+        Expr::UnaryOp {
+            op: sqlparser::ast::UnaryOperator::Not,
+            expr: inner,
+        } => {
+            // Handle NOT (condition)
+            let mut inner_conditions = Vec::new();
+            parse_expression(inner, &mut inner_conditions)?;
+            if inner_conditions.len() == 1 {
+                let inner_cond = inner_conditions.pop().unwrap();
+                conditions.push(Condition::Not(Box::new(inner_cond)));
+                Ok(())
+            } else {
+                Err(SqlError::unsupported(
+                    "NOT with multiple conditions is not supported",
+                ))
+            }
         }
         _ => Err(SqlError::unsupported(format!(
             "Unsupported expression type: {expr:?}"
