@@ -107,9 +107,10 @@ int SQLCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
   }
 
   // Build the argument array for FT.SEARCH or FT.AGGREGATE
-  // Format: FT.SEARCH <index> <query> [args...]
-  // We need: index, query, + additional args (command is separate)
-  int arg_count = 2 + (int)result.arguments_len;
+  // Format: FT.SEARCH <index> <query> [args...] DIALECT 2
+  // We need: index, query, + additional args + DIALECT 2 (command is separate)
+  // Always add DIALECT 2 to enable features like ismissing() for IS NULL queries
+  int arg_count = 2 + (int)result.arguments_len + 2;  // +2 for DIALECT 2
   RedisModuleString **args = rm_malloc(sizeof(RedisModuleString *) * arg_count);
 
   // args[0] = index name
@@ -137,6 +138,11 @@ int SQLCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
       args[2 + i] = RedisModule_CreateString(ctx, arg, strlen(arg));
     }
   }
+
+  // Add DIALECT 2 to enable advanced features like ismissing() for IS NULL queries
+  size_t dialect_idx = 2 + result.arguments_len;
+  args[dialect_idx] = RedisModule_CreateString(ctx, "DIALECT", 7);
+  args[dialect_idx + 1] = RedisModule_CreateString(ctx, "2", 1);
 
   // Choose the command name based on the SQL statement type.
   // Call the public FT.* commands which handle both single-shard and multi-shard deployments.
