@@ -90,10 +90,11 @@ fn test_multiple_qints_in_a_buffer() -> Result<(), std::io::Error> {
 
     let mut buf = [0u8; 1024];
     let mut cursor = Cursor::new(buf.as_mut());
-    let mut bytes_written = vec![];
-    bytes_written.push(qint_encode(&mut cursor, v2)?);
-    bytes_written.push(qint_encode(&mut cursor, v3)?);
-    bytes_written.push(qint_encode(&mut cursor, v4)?);
+    let bytes_written = vec![
+        qint_encode(&mut cursor, v2)?,
+        qint_encode(&mut cursor, v3)?,
+        qint_encode(&mut cursor, v4)?,
+    ];
 
     // test we wrote the right number of bytes
     assert_eq!(bytes_written[0], 4); // 1+(2+1) = 4 bytes
@@ -264,7 +265,7 @@ mod property_based {
             }
         }
 
-        pub fn leading_byte(&self) -> u8 {
+        pub const fn leading_byte(&self) -> u8 {
             let mut leading_byte = 0b00000000u8;
             match &self {
                 PropEncoding::QInt2((_, expected_size)) => {
@@ -448,8 +449,8 @@ mod property_based {
             // so we can test what happens if the decoding buffer is smaller than the expected size
             let leading_byte = prop_encoding.leading_byte();
             buf[0] = leading_byte;
-            for i in 1..buffer_size {
-                buf[i] = (rand::random::<u8>()) as u8;
+            for item in buf.iter_mut().take(buffer_size).skip(1) {
+                *item = rand::random::<u8>();
             }
 
             let mut cursor = Cursor::new(buf);

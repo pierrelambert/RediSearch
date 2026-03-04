@@ -228,15 +228,13 @@ impl NumericRangeTree {
         let avg_entries_per_leaf = self.stats.num_entries / self.stats.num_leaves;
 
         // Use adaptive threshold: lower for sparse trees
-        let threshold = if avg_entries_per_leaf < 10 {
+        if avg_entries_per_leaf < 10 {
             // Sparse tree: trigger at 25% empty
             self.stats.empty_leaves * 4 >= self.stats.num_leaves
         } else {
             // Normal tree: trigger at 50% empty
             self.stats.empty_leaves * 2 >= self.stats.num_leaves
-        };
-
-        threshold
+        }
     }
 
     /// Conditionally trim empty leaves, merge underutilized siblings, and compact the node slab.
@@ -450,10 +448,8 @@ impl NumericRangeTree {
 
         if rv.changed {
             self.revision_id = self.revision_id.wrapping_add(1);
-            self.stats.num_ranges =
-                apply_signed_delta(self.stats.num_ranges, rv.num_ranges_delta);
-            self.stats.num_leaves =
-                apply_signed_delta(self.stats.num_leaves, rv.num_leaves_delta);
+            self.stats.num_ranges = apply_signed_delta(self.stats.num_ranges, rv.num_ranges_delta);
+            self.stats.num_leaves = apply_signed_delta(self.stats.num_leaves, rv.num_leaves_delta);
             self.stats.inverted_indexes_size =
                 apply_signed_delta(self.stats.inverted_indexes_size, rv.size_delta);
         }

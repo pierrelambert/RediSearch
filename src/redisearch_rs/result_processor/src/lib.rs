@@ -469,9 +469,12 @@ pub(crate) mod test {
             let mut chain = Chain::new();
             chain.append(ResultRP::new_err(error));
 
+            // SAFETY: chain.last_raw returns a valid pointer to the last result processor.
             let rp = unsafe { chain.last_raw() };
-            let found =
-                unsafe { (rp.as_mut().next.unwrap())(rp.as_ptr(), &mut SearchResult::new()) };
+            // SAFETY: rp is valid, as_mut is safe because we have unique access.
+            let next_fn = unsafe { rp.as_mut() }.next.unwrap();
+            // SAFETY: next_fn expects a valid result processor pointer.
+            let found = unsafe { next_fn(rp.as_ptr(), &mut SearchResult::new()) };
 
             assert_eq!(found, expected);
         }
@@ -487,8 +490,12 @@ pub(crate) mod test {
         let mut chain = Chain::new();
         chain.append(ResultRP::new_ok_none());
 
+        // SAFETY: chain.last_raw returns a valid pointer to the last result processor.
         let rp = unsafe { chain.last_raw() };
-        let found = unsafe { (rp.as_mut().next.unwrap())(rp.as_ptr(), &mut SearchResult::new()) };
+        // SAFETY: rp is valid, as_mut is safe because we have unique access.
+        let next_fn = unsafe { rp.as_mut() }.next.unwrap();
+        // SAFETY: next_fn expects a valid result processor pointer.
+        let found = unsafe { next_fn(rp.as_ptr(), &mut SearchResult::new()) };
 
         assert_eq!(found, ffi::RPStatus_RS_RESULT_EOF as i32);
     }
@@ -500,8 +507,12 @@ pub(crate) mod test {
         let mut chain = Chain::new();
         chain.append(ResultRP::new_ok_some());
 
+        // SAFETY: chain.last_raw returns a valid pointer to the last result processor.
         let rp = unsafe { chain.last_raw() };
-        let found = unsafe { (rp.as_mut().next.unwrap())(rp.as_ptr(), &mut SearchResult::new()) };
+        // SAFETY: rp is valid, as_mut is safe because we have unique access.
+        let next_fn = unsafe { rp.as_mut() }.next.unwrap();
+        // SAFETY: next_fn expects a valid result processor pointer.
+        let found = unsafe { next_fn(rp.as_ptr(), &mut SearchResult::new()) };
 
         assert_eq!(found, ffi::RPStatus_RS_RESULT_OK as i32);
     }
@@ -523,10 +534,12 @@ pub(crate) mod test {
                 me: *mut Header,
                 _res: *mut SearchResult,
             ) -> c_int {
+                // SAFETY: me was created by new_upstream and is valid.
                 unsafe { me.cast::<RP>().as_ref().unwrap().ret_code }
             }
 
             unsafe extern "C" fn result_processor_free(me: *mut Header) {
+                // SAFETY: me was created by Box::into_raw in new_upstream.
                 unsafe { drop(Box::from_raw(me.cast::<RP>())) }
             }
 
@@ -568,6 +581,7 @@ pub(crate) mod test {
 
         fn check(code: i32, expected: Result<Option<()>, Error>) {
             let mut chain = Chain::new();
+            // SAFETY: new_upstream returns a valid, initialized result processor pointer.
             unsafe { chain.push_raw(new_upstream(code)) };
             chain.append(RP);
 
