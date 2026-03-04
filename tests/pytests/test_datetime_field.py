@@ -330,29 +330,28 @@ def test_datetime_limitations(env):
     """Document current limitations of DATETIME field type.
 
     This test documents features that are NOT YET supported:
-    - ISO-8601 date string parsing (e.g., "2024-01-01T00:00:00Z")
     - Relative date expressions (e.g., "now", "today", "yesterday")
     - Date arithmetic in queries
 
-    Currently, DATETIME fields only accept Unix timestamps (numeric values).
+    ISO-8601 date string parsing IS now supported.
+    DATETIME fields accept both Unix timestamps (numeric values) and ISO-8601 strings.
     """
     conn = getConnectionByEnv(env)
 
     # Create index with DATETIME field
     env.expect('FT.CREATE', 'idx', 'SCHEMA', 'timestamp', 'DATETIME').ok()
 
-    # ISO-8601 strings are NOT YET supported - they will be stored as strings
-    # and won't be indexed as timestamps
+    # ISO-8601 strings ARE now supported - they are parsed and indexed as timestamps
     env.expect('HSET', 'doc1', 'timestamp', '2024-01-01T00:00:00Z').equal(1)
 
-    # This query won't find the document because the value wasn't parsed as a timestamp
+    # This query WILL find the document because the ISO-8601 value is parsed as a timestamp
     res = env.cmd('FT.SEARCH', 'idx', '@timestamp:[1704067200 1704067200]')
-    env.assertEqual(res[0], 0)  # Not found
+    env.assertEqual(res[0], 1)  # Found (ISO-8601 is parsed)
 
-    # Only numeric Unix timestamps work
+    # Numeric Unix timestamps also work
     env.expect('HSET', 'doc2', 'timestamp', '1704067200').equal(1)
     res = env.cmd('FT.SEARCH', 'idx', '@timestamp:[1704067200 1704067200]')
-    env.assertEqual(res[0], 1)  # Found
+    env.assertEqual(res[0], 2)  # Found both documents (same timestamp)
 
 
 def test_datetime_iso8601_parsing(env):
