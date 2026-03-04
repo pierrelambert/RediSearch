@@ -1897,6 +1897,7 @@ dependencies = [
  "search_result_ffi",
  "slots_tracker_ffi",
  "sorting_vector_ffi",
+ "sql_parser_ffi",
  "syn 2.0.117",
  "toml",
  "triemap_ffi",
@@ -2426,6 +2427,33 @@ dependencies = [
  "sorting_vector",
  "value",
  "workspace_hack",
+]
+
+[[package]]
+name = "sql_parser"
+version = "0.0.1"
+dependencies = [
+ "sqlparser",
+ "thiserror",
+ "workspace_hack",
+]
+
+[[package]]
+name = "sql_parser_ffi"
+version = "0.0.1"
+dependencies = [
+ "build_utils",
+ "sql_parser",
+ "workspace_hack",
+]
+
+[[package]]
+name = "sqlparser"
+version = "0.52.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9a875d8cd437cc8a97e9aeaeea352ec9a19aea99c23e9effb17757291de80b08"
+dependencies = [
+ "log",
 ]
 
 [[package]]
