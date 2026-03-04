@@ -11,6 +11,70 @@
 #include "redismodule.h"
 #include "rmalloc.h"
 #include "redisearch_rs/headers/sql_parser_ffi.h"
+#include <string.h>
+#include <stdlib.h>
+
+/**
+ * Convert a JSON-style vector string to binary float32 format.
+ * Input: "[0.1, 0.2, 0.3]"
+ * Output: Binary blob of 3 float32 values
+ *
+ * Returns the binary blob (caller must free) and sets out_size.
+ * Returns NULL on parse error.
+ */
+static char *vector_string_to_blob(const char *vector_str, size_t *out_size) {
+  if (!vector_str || vector_str[0] != '[') {
+    return NULL;
+  }
+
+  // Count elements (approximate by counting commas + 1)
+  size_t capacity = 16;
+  float *floats = rm_malloc(sizeof(float) * capacity);
+  size_t count = 0;
+
+  const char *p = vector_str + 1;  // Skip '['
+  while (*p && *p != ']') {
+    // Skip whitespace
+    while (*p == ' ' || *p == '\t' || *p == '\n') p++;
+    if (*p == ']' || *p == '\0') break;
+
+    // Parse float
+    char *end;
+    float val = strtof(p, &end);
+    if (end == p) {
+      // Parse error
+      rm_free(floats);
+      return NULL;
+    }
+
+    // Store value
+    if (count >= capacity) {
+      capacity *= 2;
+      floats = rm_realloc(floats, sizeof(float) * capacity);
+    }
+    floats[count++] = val;
+
+    // Move to next element
+    p = end;
+    while (*p == ' ' || *p == '\t' || *p == '\n') p++;
+    if (*p == ',') p++;
+  }
+
+  if (count == 0) {
+    rm_free(floats);
+    return NULL;
+  }
+
+  *out_size = count * sizeof(float);
+  return (char *)floats;
+}
+
+/**
+ * Check if an argument looks like a vector string (starts with '[').
+ */
+static int is_vector_string(const char *str) {
+  return str && str[0] == '[';
+}
 
 /**
  * FT.SQL <sql_query>
@@ -55,8 +119,23 @@ int SQLCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
   args[1] = RedisModule_CreateString(ctx, result.query_string, strlen(result.query_string));
 
   // args[2...] = additional arguments
+  // Track binary blobs that need freeing
+  char *vector_blob = NULL;
   for (size_t i = 0; i < result.arguments_len; i++) {
-    args[2 + i] = RedisModule_CreateString(ctx, result.arguments[i], strlen(result.arguments[i]));
+    const char *arg = result.arguments[i];
+    // If this is a vector string (starts with '['), convert to binary blob
+    if (is_vector_string(arg)) {
+      size_t blob_size;
+      vector_blob = vector_string_to_blob(arg, &blob_size);
+      if (vector_blob) {
+        args[2 + i] = RedisModule_CreateString(ctx, vector_blob, blob_size);
+      } else {
+        // Fallback: pass as-is (will likely error at FT.SEARCH level)
+        args[2 + i] = RedisModule_CreateString(ctx, arg, strlen(arg));
+      }
+    } else {
+      args[2 + i] = RedisModule_CreateString(ctx, arg, strlen(arg));
+    }
   }
 
   // Choose the command name based on the SQL statement type
@@ -83,6 +162,11 @@ int SQLCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
     RedisModule_FreeString(ctx, args[i]);
   }
   rm_free(args);
+
+  // Free vector blob if allocated
+  if (vector_blob) {
+    rm_free(vector_blob);
+  }
 
   // Free the translation result
   sql_translation_result_free(result);
