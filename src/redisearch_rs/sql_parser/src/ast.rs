@@ -482,10 +482,7 @@ mod tests {
     #[test]
     fn test_select_query_with_order_and_limit() {
         let mut query = SelectQuery::new("products");
-        query.order_by = Some(OrderBy {
-            field: "price".to_string(),
-            direction: SortDirection::Desc,
-        });
+        query.order_by = Some(OrderBy::single("price", SortDirection::Desc));
         query.limit = Some(Limit {
             count: 10,
             offset: 5,
@@ -514,13 +511,43 @@ mod tests {
 
     #[test]
     fn test_order_by_clone() {
-        let ob = OrderBy {
-            field: "price".to_string(),
-            direction: SortDirection::Asc,
-        };
+        let ob = OrderBy::single("price", SortDirection::Asc);
         let cloned = ob.clone();
-        assert_eq!(ob.field, cloned.field);
-        assert_eq!(ob.direction, cloned.direction);
+        let first = ob.first().unwrap();
+        let cloned_first = cloned.first().unwrap();
+        assert_eq!(first.field, cloned_first.field);
+        assert_eq!(first.direction, cloned_first.direction);
+    }
+
+    #[test]
+    fn test_order_by_multiple_columns() {
+        let ob = OrderBy {
+            columns: vec![
+                OrderByColumn {
+                    field: "category".to_string(),
+                    direction: SortDirection::Asc,
+                },
+                OrderByColumn {
+                    field: "price".to_string(),
+                    direction: SortDirection::Desc,
+                },
+            ],
+        };
+        assert_eq!(ob.columns.len(), 2);
+        assert_eq!(ob.columns[0].field, "category");
+        assert_eq!(ob.columns[0].direction, SortDirection::Asc);
+        assert_eq!(ob.columns[1].field, "price");
+        assert_eq!(ob.columns[1].direction, SortDirection::Desc);
+    }
+
+    #[test]
+    fn test_condition_not() {
+        let inner = Condition::Equals {
+            field: "category".to_string(),
+            value: Value::String("electronics".to_string()),
+        };
+        let not_cond = Condition::Not(Box::new(inner));
+        assert_eq!(not_cond.field(), "category");
     }
 
     #[test]
