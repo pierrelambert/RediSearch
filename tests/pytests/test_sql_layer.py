@@ -60,11 +60,11 @@ def test_sql_select_fields(env):
 # =============================================================================
 
 def test_sql_where_equality(env):
-    """FT.SQL with WHERE field = 'value' on TEXT field"""
+    """FT.SQL with WHERE field = 'value' on TAG field"""
     conn = getConnectionByEnv(env)
 
-    # Use TEXT field - SQL equality translates to RQL exact match on TEXT fields
-    env.cmd('FT.CREATE', 'idx', 'SCHEMA', 'status', 'TEXT')
+    # Use TAG field - SQL equality translates to RQL TAG syntax @field:{value}
+    env.cmd('FT.CREATE', 'idx', 'SCHEMA', 'status', 'TAG')
     conn.execute_command('HSET', 'doc1', 'status', 'active')
     conn.execute_command('HSET', 'doc2', 'status', 'inactive')
 
