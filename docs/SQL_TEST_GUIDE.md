@@ -1,13 +1,16 @@
 # SQL Semantic Layer - Manual Test Guide
 
 ## Overview
+
 Quick guide to manually test and visualize the new FT.SQL command in PR #3.
 
 ## Prerequisites
+
 - Redis server with RediSearch module loaded
 - Redis CLI
 
 ## Quick Start
+
 ```bash
 # Build the module
 ./build.sh
@@ -18,22 +21,20 @@ sleep 3
 redis-cli PING
 ```
 
----
-
 ## What's New: FT.SQL Command
 
 The `FT.SQL` command allows you to query RediSearch indexes using familiar SQL syntax!
 
 ### Basic Syntax
+
 ```bash
 FT.SQL "<SQL query>"
 ```
 
----
-
 ## Test Scenario: E-Commerce Product Catalog
 
 ### Setup Test Data
+
 ```bash
 # Create products index
 redis-cli FT.CREATE products SCHEMA \
@@ -52,11 +53,10 @@ redis-cli HSET prod5 name "Monitor Stand" category "accessories" price 89 stock 
 redis-cli HSET prod6 name "Headphones" category "electronics" price 199 stock 100 description "Noise-canceling headphones"
 ```
 
----
-
 ## SQL Query Examples
 
 ### 1. SELECT All
+
 ```bash
 # SQL
 redis-cli FT.SQL "SELECT * FROM products"
@@ -66,6 +66,7 @@ redis-cli FT.SEARCH products "*"
 ```
 
 ### 2. SELECT Specific Fields
+
 ```bash
 # SQL
 redis-cli FT.SQL "SELECT name, price FROM products"
@@ -75,6 +76,7 @@ redis-cli FT.SEARCH products "*" RETURN 2 name price
 ```
 
 ### 3. WHERE with Equality
+
 ```bash
 # SQL
 redis-cli FT.SQL "SELECT * FROM products WHERE category = 'electronics'"
@@ -84,6 +86,7 @@ redis-cli FT.SEARCH products "@category:{electronics}"
 ```
 
 ### 4. WHERE with Comparison
+
 ```bash
 # SQL - Greater than
 redis-cli FT.SQL "SELECT * FROM products WHERE price > 100"
@@ -96,6 +99,7 @@ redis-cli FT.SQL "SELECT * FROM products WHERE stock >= 100"
 ```
 
 ### 5. WHERE with BETWEEN
+
 ```bash
 # SQL
 redis-cli FT.SQL "SELECT * FROM products WHERE price BETWEEN 50 AND 200"
@@ -105,6 +109,7 @@ redis-cli FT.SEARCH products "@price:[50 200]"
 ```
 
 ### 6. ORDER BY
+
 ```bash
 # SQL - Ascending
 redis-cli FT.SQL "SELECT * FROM products ORDER BY price ASC"
@@ -114,6 +119,7 @@ redis-cli FT.SQL "SELECT * FROM products ORDER BY price DESC"
 ```
 
 ### 7. LIMIT
+
 ```bash
 # SQL - First 3 results
 redis-cli FT.SQL "SELECT * FROM products LIMIT 3"
@@ -123,61 +129,58 @@ redis-cli FT.SQL "SELECT * FROM products LIMIT 3 OFFSET 2"
 ```
 
 ### 8. Combined Query
+
 ```bash
 # SQL - Full query with all clauses
 redis-cli FT.SQL "SELECT name, price FROM products WHERE price > 50 ORDER BY price DESC LIMIT 5"
 ```
 
----
-
 ## Translation Reference
 
 | SQL | RQL Equivalent |
-|-----|----------------|
-| `SELECT *` | (no RETURN clause) |
-| `SELECT field1, field2` | `RETURN 2 field1 field2` |
-| `WHERE field = 'value'` | `@field:value` |
-| `WHERE field > 100` | `@field:[(100 +inf]` |
-| `WHERE field < 100` | `@field:[-inf (100]` |
-| `WHERE field >= 100` | `@field:[100 +inf]` |
-| `WHERE field <= 100` | `@field:[-inf 100]` |
-| `WHERE field BETWEEN a AND b` | `@field:[a b]` |
-| `ORDER BY field ASC` | `SORTBY field ASC` |
-| `ORDER BY field DESC` | `SORTBY field DESC` |
-| `LIMIT n` | `LIMIT 0 n` |
-| `LIMIT n OFFSET m` | `LIMIT m n` |
-
----
+| --- | --- |
+| SELECT * | (no RETURN clause) |
+| SELECT field1, field2 | RETURN 2 field1 field2 |
+| WHERE field = 'value' | @field:value |
+| WHERE field > 100 | @field:[(100 +inf] |
+| WHERE field < 100 | @field:[-inf (100] |
+| WHERE field >= 100 | @field:[100 +inf] |
+| WHERE field <= 100 | @field:[-inf 100] |
+| WHERE field BETWEEN a AND b | @field:[a b] |
+| ORDER BY field ASC | SORTBY field ASC |
+| ORDER BY field DESC | SORTBY field DESC |
+| LIMIT n | LIMIT 0 n |
+| LIMIT n OFFSET m | LIMIT m n |
 
 ## Error Handling
 
 ### Invalid SQL Syntax
+
 ```bash
 redis-cli FT.SQL "SELEC * FROM products"
 # Error: SQL syntax error
 ```
 
 ### Missing Index
+
 ```bash
 redis-cli FT.SQL "SELECT * FROM nonexistent"
 # Error: Index not found
 ```
 
 ### Invalid Field
+
 ```bash
 redis-cli FT.SQL "SELECT * FROM products WHERE invalid_field > 100"
 # Error or empty results
 ```
 
----
-
 ## Cleanup
+
 ```bash
 redis-cli FT.DROPINDEX products DD
 redis-cli SHUTDOWN NOSAVE
 ```
-
----
 
 ## Quick Reference Card
 
@@ -194,4 +197,3 @@ redis-cli SHUTDOWN NOSAVE
 │ FT.SQL "SELECT * FROM idx LIMIT 10 OFFSET 5"                │
 └─────────────────────────────────────────────────────────────┘
 ```
-
