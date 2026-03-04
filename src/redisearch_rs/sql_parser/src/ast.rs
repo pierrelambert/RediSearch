@@ -13,10 +13,10 @@
 //! constructs supported by the RediSearch query language.
 
 /// A simplified SELECT query representation.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct SelectQuery {
     /// Fields to return. Empty means SELECT *.
-    pub fields: Vec<String>,
+    pub fields: Vec<SelectField>,
     /// The index name (from FROM clause).
     pub index_name: String,
     /// WHERE clause conditions.
@@ -25,6 +25,172 @@ pub struct SelectQuery {
     pub order_by: Option<OrderBy>,
     /// LIMIT clause.
     pub limit: Option<Limit>,
+    /// Whether DISTINCT was specified.
+    pub distinct: bool,
+    /// Aggregate functions in SELECT clause.
+    pub aggregates: Vec<AggregateExpr>,
+    /// GROUP BY clause.
+    pub group_by: Option<GroupBy>,
+    /// HAVING clause (filter on aggregates).
+    pub having: Option<Condition>,
+    /// Vector KNN search (ORDER BY field <-> vector).
+    pub vector_search: Option<VectorSearch>,
+    /// Hybrid search configuration.
+    pub hybrid_search: Option<HybridSearch>,
+}
+
+/// A field in the SELECT clause.
+#[derive(Debug, Clone)]
+pub struct SelectField {
+    /// The field name or expression.
+    pub name: String,
+    /// Optional alias (AS clause).
+    pub alias: Option<String>,
+}
+
+/// An aggregate function expression.
+#[derive(Debug, Clone)]
+pub struct AggregateExpr {
+    /// The aggregate function type.
+    pub function: AggregateFunction,
+    /// The field to aggregate (None for COUNT(*)).
+    pub field: Option<String>,
+    /// Optional alias.
+    pub alias: Option<String>,
+}
+
+/// Supported aggregate functions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AggregateFunction {
+    /// COUNT(*) or COUNT(field)
+    Count,
+    /// SUM(field)
+    Sum,
+    /// AVG(field)
+    Avg,
+    /// MIN(field)
+    Min,
+    /// MAX(field)
+    Max,
+}
+
+impl std::fmt::Display for AggregateFunction {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Count => write!(f, "COUNT"),
+            Self::Sum => write!(f, "SUM"),
+            Self::Avg => write!(f, "AVG"),
+            Self::Min => write!(f, "MIN"),
+            Self::Max => write!(f, "MAX"),
+        }
+    }
+}
+
+/// GROUP BY clause.
+#[derive(Debug, Clone)]
+pub struct GroupBy {
+    /// Fields to group by.
+    pub fields: Vec<String>,
+}
+
+/// Distance metric for vector similarity search.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DistanceMetric {
+    /// L2 (Euclidean) distance - operator `<->`
+    #[default]
+    L2,
+    /// Cosine distance - operator `<=>`
+    Cosine,
+    /// Inner product - operator `<#>`
+    InnerProduct,
+}
+
+impl std::fmt::Display for DistanceMetric {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::L2 => write!(f, "L2"),
+            Self::Cosine => write!(f, "COSINE"),
+            Self::InnerProduct => write!(f, "IP"),
+        }
+    }
+}
+
+/// Vector search configuration for KNN queries.
+#[derive(Debug, Clone)]
+pub struct VectorSearch {
+    /// The vector field name (e.g., "embedding").
+    pub field: String,
+    /// The vector blob (as string representation, e.g., "[0.1, 0.2, 0.3]").
+    pub vector: String,
+    /// Number of nearest neighbors to return (K).
+    pub k: usize,
+    /// Distance metric for the search (L2, Cosine, InnerProduct).
+    /// Note: RediSearch uses the index's distance metric, not query-time.
+    /// This field is used for documentation and potential validation.
+    pub distance_metric: DistanceMetric,
+}
+
+/// Hybrid search configuration combining text and vector search.
+#[derive(Debug, Clone)]
+pub struct HybridSearch {
+    /// Vector field configuration.
+    pub vector: VectorSearch,
+    /// Weight for vector scoring (0.0 to 1.0).
+    pub vector_weight: f64,
+    /// Weight for text scoring (0.0 to 1.0).
+    pub text_weight: f64,
+}
+
+impl SelectQuery {
+    /// Create a new SelectQuery with an index name.
+    pub fn new(index_name: impl Into<String>) -> Self {
+        Self {
+            index_name: index_name.into(),
+            ..Default::default()
+        }
+    }
+
+    /// Add a field to the query.
+    pub fn with_field(mut self, name: impl Into<String>) -> Self {
+        self.fields.push(SelectField {
+            name: name.into(),
+            alias: None,
+        });
+        self
+    }
+
+    /// Add a field with alias to the query.
+    pub fn with_field_alias(mut self, name: impl Into<String>, alias: impl Into<String>) -> Self {
+        self.fields.push(SelectField {
+            name: name.into(),
+            alias: Some(alias.into()),
+        });
+        self
+    }
+
+    /// Add a condition to the query.
+    pub fn with_condition(mut self, condition: Condition) -> Self {
+        self.conditions.push(condition);
+        self
+    }
+}
+
+impl SelectField {
+    /// Create a new SelectField.
+    pub fn new(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            alias: None,
+        }
+    }
+
+    /// Create a new SelectField with alias.
+    pub fn with_alias(name: impl Into<String>, alias: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            alias: Some(alias.into()),
+        }
+    }
 }
 
 /// A single condition in the WHERE clause.
@@ -52,10 +218,23 @@ pub enum Condition {
         values: Vec<Value>,
         negated: bool,
     },
+    /// Not equals: field != value (or field <> value)
+    NotEquals { field: String, value: Value },
+    /// Like pattern: field LIKE 'pattern%'
+    Like {
+        field: String,
+        pattern: String,
+        negated: bool,
+    },
+    /// Is null: field IS NULL
+    IsNull { field: String, negated: bool },
+    /// OR expression: combines conditions with OR
+    Or(Box<Condition>, Box<Condition>),
 }
 
 impl Condition {
     /// Returns the field name this condition applies to.
+    /// For OR conditions, returns the field from the left side.
     pub fn field(&self) -> &str {
         match self {
             Self::Equals { field, .. }
@@ -64,7 +243,11 @@ impl Condition {
             | Self::LessThan { field, .. }
             | Self::LessThanOrEqual { field, .. }
             | Self::Between { field, .. }
-            | Self::In { field, .. } => field,
+            | Self::In { field, .. }
+            | Self::NotEquals { field, .. }
+            | Self::Like { field, .. }
+            | Self::IsNull { field, .. } => field,
+            Self::Or(left, _) => left.field(),
         }
     }
 }
@@ -261,22 +444,25 @@ mod tests {
     // SelectQuery tests
     #[test]
     fn test_select_query_new() {
-        let query = SelectQuery {
-            fields: vec!["name".to_string(), "price".to_string()],
-            index_name: "products".to_string(),
-            conditions: vec![],
-            order_by: Some(OrderBy {
-                field: "price".to_string(),
-                direction: SortDirection::Desc,
-            }),
-            limit: Some(Limit {
-                count: 10,
-                offset: 5,
-            }),
-        };
+        let query = SelectQuery::new("products")
+            .with_field("name")
+            .with_field("price");
         assert_eq!(query.fields.len(), 2);
         assert_eq!(query.index_name, "products");
         assert!(query.conditions.is_empty());
+    }
+
+    #[test]
+    fn test_select_query_with_order_and_limit() {
+        let mut query = SelectQuery::new("products");
+        query.order_by = Some(OrderBy {
+            field: "price".to_string(),
+            direction: SortDirection::Desc,
+        });
+        query.limit = Some(Limit {
+            count: 10,
+            offset: 5,
+        });
         assert!(query.order_by.is_some());
         assert!(query.limit.is_some());
     }
@@ -323,16 +509,12 @@ mod tests {
 
     #[test]
     fn test_select_query_clone() {
-        let query = SelectQuery {
-            fields: vec!["name".to_string()],
-            index_name: "idx".to_string(),
-            conditions: vec![Condition::Equals {
+        let query = SelectQuery::new("idx")
+            .with_field("name")
+            .with_condition(Condition::Equals {
                 field: "x".to_string(),
                 value: Value::Number(1.0),
-            }],
-            order_by: None,
-            limit: None,
-        };
+            });
         let cloned = query.clone();
         assert_eq!(query.index_name, cloned.index_name);
     }

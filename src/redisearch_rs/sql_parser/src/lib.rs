@@ -13,7 +13,7 @@
 //! It parses standard SQL SELECT queries and converts them into equivalent
 //! RediSearch commands.
 //!
-//! # Phase 1 Support
+//! # Supported SQL Features
 //!
 //! The following SQL constructs are supported:
 //!
@@ -37,10 +37,73 @@
 //! ## ORDER BY clause
 //! - `ORDER BY field ASC` - Ascending sort
 //! - `ORDER BY field DESC` - Descending sort
+//! - `ORDER BY field <-> '[...]'` - Vector L2/Euclidean distance (pgvector syntax)
+//! - `ORDER BY field <=> '[...]'` - Vector Cosine distance (pgvector syntax)
+//! - `ORDER BY field <#> '[...]'` - Vector Inner Product (pgvector syntax)
 //!
 //! ## LIMIT clause
 //! - `LIMIT n` - First n results
 //! - `LIMIT n OFFSET m` - Skip m, take n
+//!
+//! ## Vector Search (pgvector syntax)
+//!
+//! Vector similarity search supports three distance metrics:
+//!
+//! | Operator | Distance Metric | Description |
+//! |----------|----------------|-------------|
+//! | `<->`    | L2 (Euclidean) | Squared Euclidean distance |
+//! | `<=>`    | Cosine         | 1 - cosine similarity |
+//! | `<#>`    | Inner Product  | Negative inner product |
+//!
+//! ```sql
+//! -- L2 distance search (pgvector default)
+//! SELECT * FROM products ORDER BY embedding <-> '[0.1, 0.2, 0.3]' LIMIT 10
+//!
+//! -- Cosine distance search
+//! SELECT * FROM products ORDER BY embedding <=> '[0.1, 0.2, 0.3]' LIMIT 10
+//!
+//! -- Inner product search
+//! SELECT * FROM products ORDER BY embedding <#> '[0.1, 0.2, 0.3]' LIMIT 10
+//!
+//! -- Filter + KNN (works with any distance metric)
+//! SELECT * FROM products
+//! WHERE category = 'electronics'
+//! ORDER BY embedding <=> '[0.1, 0.2]' LIMIT 5
+//! ```
+//!
+//! **Note:** RediSearch uses the distance metric specified during index creation
+//! (via `DISTANCE_METRIC` in `FT.CREATE`). The SQL operator indicates intent but
+//! the actual metric used depends on the index configuration.
+//!
+//! This translates to RediSearch KNN queries:
+//! - Pure KNN: `FT.SEARCH idx "*=>[KNN 10 @embedding $BLOB]" PARAMS 2 BLOB <vector>`
+//! - With filter: `FT.SEARCH idx "@category:{electronics}=>[KNN 5 @embedding $BLOB]" ...`
+//!
+//! The `K` value comes from the `LIMIT` clause (defaults to 10 if not specified).
+//!
+//! ## FT.HYBRID with Weighted Scoring
+//!
+//! For hybrid search with weighted scoring between vector and text results,
+//! use the `OPTION` clause:
+//!
+//! ```sql
+//! -- Weighted hybrid search (70% vector, 30% text)
+//! SELECT * FROM products
+//! WHERE name MATCH 'laptop'
+//! ORDER BY embedding <-> '[0.1, 0.2]' LIMIT 10
+//! OPTION (vector_weight = 0.7, text_weight = 0.3)
+//! ```
+//!
+//! This translates to:
+//! ```text
+//! FT.HYBRID products "@name:laptop"
+//!   VECTOR embedding K 10 VECTOR_BLOB <blob>
+//!   WEIGHT 0.7 TEXT 0.3
+//! ```
+//!
+//! **OPTION clause parameters:**
+//! - `vector_weight`: Weight for vector similarity (0.0 to 1.0, default: 0.5)
+//! - `text_weight`: Weight for text relevance (0.0 to 1.0, default: 0.5)
 //!
 //! # Example
 //!
@@ -71,6 +134,8 @@ pub enum Command {
     Search,
     /// Use FT.AGGREGATE for this query (for GROUP BY).
     Aggregate,
+    /// Use FT.HYBRID for weighted vector + text search.
+    Hybrid,
 }
 
 /// Result of translating a SQL query to RQL.
@@ -266,5 +331,342 @@ mod tests {
             result.query_string,
             "@category:{electronics|accessories} @price:[(100 +inf]"
         );
+    }
+
+    // New features integration tests
+    #[test]
+    fn test_not_equals() {
+        let result = translate("SELECT * FROM idx WHERE status != 'deleted'").unwrap();
+        assert_eq!(result.query_string, "-@status:{deleted}");
+    }
+
+    #[test]
+    fn test_or_operator() {
+        let result = translate("SELECT * FROM idx WHERE a = 1 OR b = 2").unwrap();
+        assert_eq!(result.query_string, "(@a:[1 1]|@b:[2 2])");
+    }
+
+    #[test]
+    fn test_like_prefix() {
+        let result = translate("SELECT * FROM idx WHERE name LIKE 'Lap%'").unwrap();
+        assert_eq!(result.query_string, "@name:Lap*");
+    }
+
+    #[test]
+    fn test_like_suffix() {
+        let result = translate("SELECT * FROM idx WHERE name LIKE '%top'").unwrap();
+        assert_eq!(result.query_string, "@name:*top");
+    }
+
+    #[test]
+    fn test_like_contains() {
+        let result = translate("SELECT * FROM idx WHERE name LIKE '%apt%'").unwrap();
+        assert_eq!(result.query_string, "@name:*apt*");
+    }
+
+    #[test]
+    fn test_select_with_alias() {
+        let result = translate("SELECT name AS product_name FROM products").unwrap();
+        assert!(result.arguments.contains(&"RETURN".to_string()));
+        assert!(result.arguments.contains(&"AS".to_string()));
+        assert!(result.arguments.contains(&"product_name".to_string()));
+    }
+
+    #[test]
+    fn test_is_null() {
+        let result = translate("SELECT * FROM idx WHERE category IS NULL").unwrap();
+        assert_eq!(result.query_string, "ismissing(@category)");
+    }
+
+    #[test]
+    fn test_is_not_null() {
+        let result = translate("SELECT * FROM idx WHERE category IS NOT NULL").unwrap();
+        assert_eq!(result.query_string, "-ismissing(@category)");
+    }
+
+    #[test]
+    fn test_select_distinct() {
+        let result = translate("SELECT DISTINCT category FROM idx").unwrap();
+        assert_eq!(result.command, Command::Aggregate);
+        assert!(result.arguments.contains(&"GROUPBY".to_string()));
+    }
+
+    #[test]
+    fn test_count_star() {
+        let result = translate("SELECT COUNT(*) FROM idx").unwrap();
+        assert_eq!(result.command, Command::Aggregate);
+        assert!(result.arguments.contains(&"REDUCE".to_string()));
+        assert!(result.arguments.contains(&"COUNT".to_string()));
+    }
+
+    #[test]
+    fn test_sum_aggregate() {
+        let result = translate("SELECT SUM(price) FROM idx").unwrap();
+        assert_eq!(result.command, Command::Aggregate);
+        assert!(result.arguments.contains(&"REDUCE".to_string()));
+        assert!(result.arguments.contains(&"SUM".to_string()));
+    }
+
+    #[test]
+    fn test_group_by() {
+        let result = translate("SELECT category, COUNT(*) FROM idx GROUP BY category").unwrap();
+        assert_eq!(result.command, Command::Aggregate);
+        assert!(result.arguments.contains(&"GROUPBY".to_string()));
+        assert!(result.arguments.contains(&"@category".to_string()));
+    }
+
+    #[test]
+    fn test_group_by_with_having() {
+        let result =
+            translate("SELECT category, COUNT(*) FROM idx GROUP BY category HAVING COUNT(*) > 5")
+                .unwrap();
+        assert_eq!(result.command, Command::Aggregate);
+        assert!(result.arguments.contains(&"FILTER".to_string()));
+    }
+
+    // Vector search tests - note: <-> operator parsing depends on sqlparser support
+    // These tests verify the AST and translation when vector search is present
+    #[test]
+    fn test_vector_knn_query_string() {
+        // Test translation of a query with vector search set programmatically
+        use crate::ast::{DistanceMetric, SelectQuery, VectorSearch};
+        use crate::translator;
+
+        let mut query = SelectQuery::new("products");
+        query.vector_search = Some(VectorSearch {
+            field: "embedding".to_string(),
+            vector: "[0.1, 0.2, 0.3]".to_string(),
+            k: 10,
+            distance_metric: DistanceMetric::default(),
+        });
+
+        let result = translator::translate(query).unwrap();
+        assert_eq!(result.command, Command::Search);
+        assert_eq!(result.query_string, "*=>[KNN 10 @embedding $BLOB]");
+        assert!(result.arguments.contains(&"PARAMS".to_string()));
+        assert!(result.arguments.contains(&"BLOB".to_string()));
+    }
+
+    #[test]
+    fn test_hybrid_vector_search() {
+        // Test hybrid search with filter + vector
+        use crate::ast::{Condition, DistanceMetric, SelectQuery, Value, VectorSearch};
+        use crate::translator;
+
+        let mut query = SelectQuery::new("products");
+        query.conditions.push(Condition::Equals {
+            field: "category".to_string(),
+            value: Value::String("electronics".to_string()),
+        });
+        query.vector_search = Some(VectorSearch {
+            field: "embedding".to_string(),
+            vector: "[0.1, 0.2]".to_string(),
+            k: 5,
+            distance_metric: DistanceMetric::default(),
+        });
+
+        let result = translator::translate(query).unwrap();
+        assert_eq!(result.command, Command::Search);
+        assert_eq!(
+            result.query_string,
+            "@category:{electronics}=>[KNN 5 @embedding $BLOB]"
+        );
+    }
+
+    #[test]
+    fn test_ft_hybrid_command() {
+        // Test FT.HYBRID command generation
+        use crate::ast::{DistanceMetric, HybridSearch, SelectQuery, VectorSearch};
+        use crate::translator;
+
+        let mut query = SelectQuery::new("products");
+        query.hybrid_search = Some(HybridSearch {
+            vector: VectorSearch {
+                field: "embedding".to_string(),
+                vector: "[0.1, 0.2, 0.3]".to_string(),
+                k: 10,
+                distance_metric: DistanceMetric::default(),
+            },
+            vector_weight: 0.7,
+            text_weight: 0.3,
+        });
+
+        let result = translator::translate(query).unwrap();
+        assert_eq!(result.command, Command::Hybrid);
+        assert!(result.arguments.contains(&"VECTOR".to_string()));
+        assert!(result.arguments.contains(&"WEIGHT".to_string()));
+    }
+
+    // End-to-end SQL parsing tests with <-> operator (pgvector syntax)
+    #[test]
+    fn test_vector_search_sql_pure_knn() {
+        // Pure KNN search: SELECT * FROM products ORDER BY embedding <-> '[...]' LIMIT 10
+        let result =
+            translate("SELECT * FROM products ORDER BY embedding <-> '[0.1, 0.2, 0.3]' LIMIT 10")
+                .unwrap();
+        assert_eq!(result.command, Command::Search);
+        assert_eq!(result.index_name, "products");
+        assert_eq!(result.query_string, "*=>[KNN 10 @embedding $BLOB]");
+        // Verify PARAMS include vector blob
+        assert!(result.arguments.contains(&"PARAMS".to_string()));
+        assert!(result.arguments.contains(&"2".to_string())); // PARAMS count
+        assert!(result.arguments.contains(&"BLOB".to_string()));
+        assert!(result.arguments.contains(&"[0.1, 0.2, 0.3]".to_string()));
+    }
+
+    #[test]
+    fn test_vector_search_sql_with_filter() {
+        // Hybrid: Filter + KNN
+        let result = translate(
+            "SELECT * FROM products WHERE category = 'electronics' ORDER BY embedding <-> '[0.1, 0.2]' LIMIT 5",
+        )
+        .unwrap();
+        assert_eq!(result.command, Command::Search);
+        assert_eq!(
+            result.query_string,
+            "@category:{electronics}=>[KNN 5 @embedding $BLOB]"
+        );
+    }
+
+    #[test]
+    fn test_vector_search_sql_default_k() {
+        // Without LIMIT, K defaults to 10
+        let result =
+            translate("SELECT * FROM products ORDER BY embedding <-> '[0.1, 0.2, 0.3]'").unwrap();
+        assert_eq!(result.query_string, "*=>[KNN 10 @embedding $BLOB]");
+    }
+
+    #[test]
+    fn test_vector_search_sql_with_fields() {
+        // Vector search with specific field selection
+        let result = translate(
+            "SELECT name, price FROM products ORDER BY embedding <-> '[0.1, 0.2]' LIMIT 5",
+        )
+        .unwrap();
+        assert_eq!(result.query_string, "*=>[KNN 5 @embedding $BLOB]");
+        // RETURN should be present
+        assert!(result.arguments.contains(&"RETURN".to_string()));
+        assert!(result.arguments.contains(&"name".to_string()));
+        assert!(result.arguments.contains(&"price".to_string()));
+    }
+
+    #[test]
+    fn test_vector_search_sql_with_multiple_filters() {
+        // Vector search with multiple WHERE conditions
+        let result = translate(
+            "SELECT * FROM products WHERE category = 'electronics' AND price > 100 ORDER BY embedding <-> '[0.5]' LIMIT 3",
+        )
+        .unwrap();
+        assert_eq!(
+            result.query_string,
+            "@category:{electronics} @price:[(100 +inf]=>[KNN 3 @embedding $BLOB]"
+        );
+    }
+
+    // Cosine distance tests (<=> operator)
+    #[test]
+    fn test_vector_search_sql_cosine_distance() {
+        // Cosine distance: SELECT * FROM products ORDER BY embedding <=> '[...]' LIMIT 10
+        let result =
+            translate("SELECT * FROM products ORDER BY embedding <=> '[0.1, 0.2, 0.3]' LIMIT 10")
+                .unwrap();
+        assert_eq!(result.command, Command::Search);
+        assert_eq!(result.index_name, "products");
+        // KNN syntax is the same regardless of distance metric (metric is set at index creation)
+        assert_eq!(result.query_string, "*=>[KNN 10 @embedding $BLOB]");
+        assert!(result.arguments.contains(&"PARAMS".to_string()));
+        assert!(result.arguments.contains(&"[0.1, 0.2, 0.3]".to_string()));
+    }
+
+    #[test]
+    fn test_vector_search_sql_cosine_with_filter() {
+        // Cosine with filter: Filter + KNN with <=> operator
+        let result = translate(
+            "SELECT * FROM products WHERE category = 'electronics' ORDER BY embedding <=> '[0.1, 0.2]' LIMIT 5",
+        )
+        .unwrap();
+        assert_eq!(result.command, Command::Search);
+        assert_eq!(
+            result.query_string,
+            "@category:{electronics}=>[KNN 5 @embedding $BLOB]"
+        );
+    }
+
+    #[test]
+    fn test_vector_search_sql_inner_product() {
+        // Inner product: SELECT * FROM products ORDER BY embedding <#> '[...]' LIMIT 10
+        let result =
+            translate("SELECT * FROM products ORDER BY embedding <#> '[0.1, 0.2, 0.3]' LIMIT 10")
+                .unwrap();
+        assert_eq!(result.command, Command::Search);
+        assert_eq!(result.query_string, "*=>[KNN 10 @embedding $BLOB]");
+        assert!(result.arguments.contains(&"PARAMS".to_string()));
+    }
+
+    // FT.HYBRID tests with OPTION clause
+    #[test]
+    fn test_hybrid_search_sql_basic() {
+        // FT.HYBRID with weights via OPTION clause
+        let result = translate(
+            "SELECT * FROM products \
+             ORDER BY embedding <-> '[0.1, 0.2, 0.3]' LIMIT 10 \
+             OPTION (vector_weight = 0.7, text_weight = 0.3)",
+        )
+        .unwrap();
+
+        assert_eq!(result.command, Command::Hybrid);
+        assert_eq!(result.index_name, "products");
+        // For FT.HYBRID, query_string is just the text query (no KNN syntax)
+        assert_eq!(result.query_string, "*");
+
+        // Arguments should include VECTOR, K, VECTOR_BLOB, WEIGHT, TEXT
+        assert!(result.arguments.contains(&"VECTOR".to_string()));
+        assert!(result.arguments.contains(&"embedding".to_string()));
+        assert!(result.arguments.contains(&"K".to_string()));
+        assert!(result.arguments.contains(&"10".to_string()));
+        assert!(result.arguments.contains(&"VECTOR_BLOB".to_string()));
+        assert!(result.arguments.contains(&"WEIGHT".to_string()));
+        assert!(result.arguments.contains(&"0.7".to_string()));
+        assert!(result.arguments.contains(&"TEXT".to_string()));
+        assert!(result.arguments.contains(&"0.3".to_string()));
+    }
+
+    #[test]
+    fn test_hybrid_search_sql_with_filter() {
+        // FT.HYBRID with filter and weights
+        let result = translate(
+            "SELECT * FROM products \
+             WHERE category = 'electronics' \
+             ORDER BY embedding <=> '[0.1, 0.2]' LIMIT 5 \
+             OPTION (vector_weight = 0.6, text_weight = 0.4)",
+        )
+        .unwrap();
+
+        assert_eq!(result.command, Command::Hybrid);
+        // Query string includes the filter
+        assert_eq!(result.query_string, "@category:{electronics}");
+
+        // Verify weights
+        assert!(result.arguments.contains(&"WEIGHT".to_string()));
+        assert!(result.arguments.contains(&"0.6".to_string()));
+        assert!(result.arguments.contains(&"TEXT".to_string()));
+        assert!(result.arguments.contains(&"0.4".to_string()));
+    }
+
+    #[test]
+    fn test_hybrid_search_sql_with_limit() {
+        // FT.HYBRID includes LIMIT
+        let result = translate(
+            "SELECT * FROM products \
+             ORDER BY embedding <-> '[0.1]' LIMIT 20 OFFSET 10 \
+             OPTION (vector_weight = 0.5, text_weight = 0.5)",
+        )
+        .unwrap();
+
+        assert_eq!(result.command, Command::Hybrid);
+        // LIMIT should be in arguments
+        assert!(result.arguments.contains(&"LIMIT".to_string()));
+        assert!(result.arguments.contains(&"10".to_string())); // offset
+        assert!(result.arguments.contains(&"20".to_string())); // count
     }
 }
