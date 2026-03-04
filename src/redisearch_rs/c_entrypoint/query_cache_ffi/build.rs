@@ -12,4 +12,3 @@ use build_utils::run_cbindgen;
 fn main() {
     run_cbindgen("../../headers/query_cache.h").unwrap();
 }
-

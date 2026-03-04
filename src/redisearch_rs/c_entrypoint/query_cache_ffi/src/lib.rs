@@ -156,7 +156,6 @@ pub unsafe extern "C" fn QueryCache_Resize(cache: *mut OpaqueQueryCache, new_max
     cache_mut.resize(new_max_entries);
 }
 
-
 /// C-compatible cache statistics structure.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
@@ -225,4 +224,3 @@ pub unsafe extern "C" fn QueryCache_ResetStats(cache: *mut OpaqueQueryCache) {
     let cache_mut = unsafe { QueryCache::from_opaque_mut(cache) };
     cache_mut.reset_stats();
 }
-

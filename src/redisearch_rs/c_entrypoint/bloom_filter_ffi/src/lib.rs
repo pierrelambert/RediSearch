@@ -113,11 +113,7 @@ pub unsafe extern "C" fn BloomFilter_Contains(
         &[]
     };
 
-    if bloom.contains(key) {
-        1
-    } else {
-        0
-    }
+    if bloom.contains(key) { 1 } else { 0 }
 }
 
 /// Get the number of items inserted into the filter.
@@ -178,4 +174,3 @@ pub unsafe extern "C" fn BloomFilter_Free(filter: *mut BloomFilter) {
     // If that invariant is upheld, then the following line is sound.
     let _filter = unsafe { Box::from_raw(filter) };
 }
-

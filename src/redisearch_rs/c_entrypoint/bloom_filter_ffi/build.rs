@@ -13,4 +13,3 @@ fn main() {
         .join("src/redisearch_rs/headers/bloom_filter.h");
     build_utils::run_cbindgen(header_path).expect("Failed to generate C header");
 }
-
