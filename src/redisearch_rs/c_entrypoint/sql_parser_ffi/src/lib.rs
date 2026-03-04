@@ -30,6 +30,8 @@ pub enum SqlCommand {
     Search = 0,
     /// Use FT.AGGREGATE for this query.
     Aggregate = 1,
+    /// Use FT.HYBRID for weighted vector + text search.
+    Hybrid = 2,
 }
 
 impl From<Command> for SqlCommand {
@@ -37,6 +39,7 @@ impl From<Command> for SqlCommand {
         match cmd {
             Command::Search => SqlCommand::Search,
             Command::Aggregate => SqlCommand::Aggregate,
+            Command::Hybrid => SqlCommand::Hybrid,
         }
     }
 }
