@@ -138,8 +138,23 @@ int SQLCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
     }
   }
 
-  // Choose the command name based on the SQL statement type
-  const char *cmd_name = (result.command == Search) ? "FT.SEARCH" : "FT.AGGREGATE";
+  // Choose the command name based on the SQL statement type.
+  // Call the public FT.* commands which handle both single-shard and multi-shard deployments.
+  const char *cmd_name;
+  switch (result.command) {
+    case Search:
+      cmd_name = "FT.SEARCH";
+      break;
+    case Aggregate:
+      cmd_name = "FT.AGGREGATE";
+      break;
+    case Hybrid:
+      cmd_name = "FT.HYBRID";
+      break;
+    default:
+      cmd_name = "FT.SEARCH";
+      break;
+  }
 
   // Call the command via RedisModule_Call with "v" format (array of RedisModuleString)
   // Flags:

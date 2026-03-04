@@ -821,6 +821,3 @@ mod tests {
         assert_eq!(args[sortby_idx + 5], "DESC");
     }
 }
-
-#[cfg(test)]
-mod debug_test;

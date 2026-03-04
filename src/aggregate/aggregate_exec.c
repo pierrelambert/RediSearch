@@ -417,8 +417,6 @@ static void startPipeline(AREQ *req, ResultProcessor *rp, SearchResult ***result
     PLN_ArrangeStep *arng = AGPLN_GetArrangeStep(plan);
     size_t result_limit = arng && arng->isLimited ? arng->limit : DEFAULT_LIMIT;
     needsAggregation = QueryCache_ShouldCache(reqFlags, result_limit);
-    fprintf(stderr, "[QueryCache] startPipeline: needsAggregation=%d shouldCache=%d limit=%zu\n",
-            needsAggregation, QueryCache_ShouldCache(reqFlags, result_limit), result_limit);
   }
 
   CommonPipelineCtx ctx = {
