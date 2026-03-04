@@ -420,7 +420,7 @@ fn translate_having_condition(condition: &Condition) -> Result<String, SqlError>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ast::Value;
+    use crate::ast::{OrderBy, Value};
 
     #[test]
     fn test_translate_empty_conditions() {
@@ -693,5 +693,79 @@ mod tests {
             result.query_string,
             "@category:{electronics} @price:[(100 +inf]=>[KNN 3 @embedding $BLOB]"
         );
+    }
+
+    // NOT operator tests
+    #[test]
+    fn test_translate_not_equals() {
+        let query = SelectQuery::new("idx").with_condition(Condition::Not(Box::new(
+            Condition::Equals {
+                field: "category".to_string(),
+                value: Value::String("electronics".to_string()),
+            },
+        )));
+        let result = translate(query).unwrap();
+        assert_eq!(result.query_string, "-(@category:{electronics})");
+    }
+
+    #[test]
+    fn test_translate_not_greater_than() {
+        let query = SelectQuery::new("idx").with_condition(Condition::Not(Box::new(
+            Condition::GreaterThan {
+                field: "price".to_string(),
+                value: Value::Number(100.0),
+            },
+        )));
+        let result = translate(query).unwrap();
+        assert_eq!(result.query_string, "-(@price:[(100 +inf])");
+    }
+
+    #[test]
+    fn test_translate_not_like() {
+        let query = SelectQuery::new("idx").with_condition(Condition::Not(Box::new(
+            Condition::Like {
+                field: "name".to_string(),
+                pattern: "Lap%".to_string(),
+                negated: false,
+            },
+        )));
+        let result = translate(query).unwrap();
+        assert_eq!(result.query_string, "-(@name:Lap*)");
+    }
+
+    // Multiple ORDER BY tests
+    #[test]
+    fn test_translate_order_by_multiple_columns() {
+        use crate::ast::OrderByColumn;
+        let mut query = SelectQuery::new("products");
+        query.order_by = Some(OrderBy {
+            columns: vec![
+                OrderByColumn {
+                    field: "category".to_string(),
+                    direction: crate::ast::SortDirection::Asc,
+                },
+                OrderByColumn {
+                    field: "price".to_string(),
+                    direction: crate::ast::SortDirection::Desc,
+                },
+            ],
+        });
+        let result = translate(query).unwrap();
+        // FT.SEARCH: SORTBY field1 ASC field2 DESC
+        assert!(result.arguments.contains(&"SORTBY".to_string()));
+        assert!(result.arguments.contains(&"category".to_string()));
+        assert!(result.arguments.contains(&"ASC".to_string()));
+        assert!(result.arguments.contains(&"price".to_string()));
+        assert!(result.arguments.contains(&"DESC".to_string()));
+    }
+
+    #[test]
+    fn test_translate_order_by_single_column() {
+        let mut query = SelectQuery::new("products");
+        query.order_by = Some(OrderBy::single("name", crate::ast::SortDirection::Asc));
+        let result = translate(query).unwrap();
+        assert!(result.arguments.contains(&"SORTBY".to_string()));
+        assert!(result.arguments.contains(&"name".to_string()));
+        assert!(result.arguments.contains(&"ASC".to_string()));
     }
 }

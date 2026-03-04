@@ -343,7 +343,8 @@ mod tests {
     #[test]
     fn test_or_operator() {
         let result = translate("SELECT * FROM idx WHERE a = 1 OR b = 2").unwrap();
-        assert_eq!(result.query_string, "(@a:[1 1]|@b:[2 2])");
+        // RQL OR requires spaces around pipe between parenthesized sub-conditions
+        assert_eq!(result.query_string, "(@a:[1 1]) | (@b:[2 2])");
     }
 
     #[test]
