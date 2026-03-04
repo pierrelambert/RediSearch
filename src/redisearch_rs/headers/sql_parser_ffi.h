@@ -20,6 +20,10 @@ typedef enum SqlCommand {
    * Use FT.AGGREGATE for this query.
    */
   Aggregate = 1,
+  /**
+   * Use FT.HYBRID for weighted vector + text search.
+   */
+  Hybrid = 2,
 } SqlCommand;
 
 /**
