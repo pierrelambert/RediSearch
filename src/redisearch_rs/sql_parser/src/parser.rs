@@ -1603,4 +1603,46 @@ mod tests {
         let err = result.unwrap_err().to_string();
         assert!(err.contains("Unknown OPTION key"));
     }
+
+    // NOT operator tests
+    #[test]
+    fn test_parse_not_equals_condition() {
+        let query = parse("SELECT * FROM idx WHERE NOT (category = 'electronics')").unwrap();
+        assert_eq!(query.conditions.len(), 1);
+        assert!(matches!(&query.conditions[0], Condition::Not(_)));
+    }
+
+    #[test]
+    fn test_parse_not_greater_than() {
+        let query = parse("SELECT * FROM idx WHERE NOT (price > 100)").unwrap();
+        assert_eq!(query.conditions.len(), 1);
+        match &query.conditions[0] {
+            Condition::Not(inner) => {
+                assert!(matches!(inner.as_ref(), Condition::GreaterThan { .. }));
+            }
+            _ => panic!("Expected Not condition"),
+        }
+    }
+
+    #[test]
+    fn test_parse_not_like() {
+        let query = parse("SELECT * FROM idx WHERE NOT (name LIKE 'Lap%')").unwrap();
+        assert_eq!(query.conditions.len(), 1);
+        match &query.conditions[0] {
+            Condition::Not(inner) => {
+                assert!(matches!(inner.as_ref(), Condition::Like { .. }));
+            }
+            _ => panic!("Expected Not condition"),
+        }
+    }
+
+    #[test]
+    fn test_parse_not_with_and() {
+        let query =
+            parse("SELECT * FROM idx WHERE NOT (category = 'electronics') AND price > 50")
+                .unwrap();
+        assert_eq!(query.conditions.len(), 2);
+        assert!(matches!(&query.conditions[0], Condition::Not(_)));
+        assert!(matches!(&query.conditions[1], Condition::GreaterThan { .. }));
+    }
 }

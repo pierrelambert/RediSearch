@@ -327,12 +327,15 @@ fn build_arguments(query: &SelectQuery, command: Command) -> Result<Vec<String>,
                 args.push(filter_expr);
             }
 
-            // SORTBY clause
+            // SORTBY clause (FT.AGGREGATE format: SORTBY nargs @field1 ASC @field2 DESC ...)
             if let Some(order_by) = &query.order_by {
                 args.push("SORTBY".to_string());
-                args.push("1".to_string()); // Number of sort fields
-                args.push(format!("@{}", order_by.field));
-                args.push(order_by.direction.to_string());
+                // nargs = 2 per column (field + direction)
+                args.push((order_by.columns.len() * 2).to_string());
+                for col in &order_by.columns {
+                    args.push(format!("@{}", col.field));
+                    args.push(col.direction.to_string());
+                }
             }
 
             // LIMIT clause
