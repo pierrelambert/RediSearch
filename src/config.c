@@ -1265,6 +1265,27 @@ CONFIG_GETTER(getTrimmingStateCheckDelay) {
 CONFIG_BOOLEAN_SETTER(setDebugSimulateInFlex, simulateInFlex)
 CONFIG_BOOLEAN_GETTER(getDebugSimulateInFlex, simulateInFlex, 0)
 
+// QUERYCACHE_MAX_SIZE
+CONFIG_SETTER(setQueryCacheMaxSize) {
+  size_t val;
+  int acrc = AC_GetSize(ac, &val, AC_F_GE0);
+  CHECK_RETURN_PARSE_ERROR(acrc);
+  config->queryCacheMaxSize = val;
+  // Resize the cache if it's already initialized
+  extern void QueryCacheIntegration_Resize(size_t new_max_entries);
+  QueryCacheIntegration_Resize(val);
+  return REDISMODULE_OK;
+}
+
+CONFIG_GETTER(getQueryCacheMaxSize) {
+  sds ss = sdsempty();
+  return sdscatprintf(ss, "%zu", config->queryCacheMaxSize);
+}
+
+// QUERYCACHE_ENABLED
+CONFIG_BOOLEAN_SETTER(setQueryCacheEnabled, queryCacheEnabled)
+CONFIG_BOOLEAN_GETTER(getQueryCacheEnabled, queryCacheEnabled, 0)
+
 // ON_OOM
 CONFIG_SETTER(setOnOom) {
   size_t len;

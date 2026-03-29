@@ -34,6 +34,7 @@
 #include "info/info_redis/info_redis.h"
 #include "util/logging.h"
 #include "asm_state_machine.h"
+#include "query_cache_integration.h"
 
 #define DEPLETER_POOL_SIZE 4
 
@@ -155,6 +156,9 @@ int RediSearch_Init(RedisModuleCtx *ctx, int mode) {
 
   CleanPool_ThreadPoolStart();
   DO_LOG("notice", "Initialized thread pools!");
+
+  // Init query cache
+  QueryCacheIntegration_Init(RSGlobalConfig.queryCacheMaxSize);
 
   // Init cursors mechanism
   CursorList_Init(&g_CursorsList, false);

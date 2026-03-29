@@ -1614,6 +1614,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "query_cache"
+version = "0.0.1"
+dependencies = [
+ "ahash",
+ "rstest",
+ "workspace_hack",
+]
+
+[[package]]
+name = "query_cache_ffi"
+version = "0.0.1"
+dependencies = [
+ "build_utils",
+ "query_cache",
+ "workspace_hack",
+]
+
+[[package]]
 name = "query_error"
 version = "0.0.1"
 dependencies = [

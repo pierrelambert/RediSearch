@@ -528,6 +528,12 @@ char *IndexSpec_FormatObfuscatedName(const HiddenString *specName) {
   return rm_strdup(buffer);
 }
 
+void IndexSpec_BumpRevision(IndexSpec *spec) {
+  if (spec) {
+    __atomic_fetch_add(&spec->revision, 1, __ATOMIC_SEQ_CST);
+  }
+}
+
 static bool checkIfSpecExists(const char *rawSpecName) {
   bool found = false;
   HiddenString* specName = NewHiddenString(rawSpecName, strlen(rawSpecName), false);

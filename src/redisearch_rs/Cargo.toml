@@ -40,6 +40,7 @@ members = [
     "wildcard",
     "workspace_hack",
     "idf",
+    "query_cache",
 ]
 
 resolver = "3"
@@ -103,6 +104,7 @@ inverted_index = { path = "./inverted_index" }
 numeric_range_tree = { path = "./numeric_range_tree" }
 redis_reply = { path = "./redis_reply" }
 qint = { path = "./qint" }
+query_cache = { path = "./query_cache" }
 query_error = { path = "./query_error" }
 query_term = { path = "./query_term" }
 redis_json_api = { path = "./redis_json_api" }
