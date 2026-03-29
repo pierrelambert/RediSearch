@@ -48,8 +48,11 @@
 #include "util/redis_mem_info.h"
 #include "search_disk.h"
 #include "search_disk_utils.h"
+#include "redisearch_rs/headers/bloom_filter.h"
 
 #define INITIAL_DOC_TABLE_SIZE 1000
+#define TERM_FILTER_INITIAL_CAPACITY 10000U
+#define TERM_FILTER_TARGET_FPR 0.01
 
 ///////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -1895,12 +1898,117 @@ size_t IndexSpec_GetIndexErrorCount(const IndexSpec *sp) {
   return IndexError_ErrorCount(&sp->stats.indexError);
 }
 
+// === BLOOM FILTER IMPLEMENTATION ===
+
+static size_t IndexSpec_BloomFilterThreshold(size_t capacity) {
+  size_t threshold = (capacity * 4) / 5;
+  return threshold > 0 ? threshold : 1;
+}
+
+static size_t IndexSpec_BloomFilterRequiredCapacity(size_t numTerms) {
+  size_t capacity = TERM_FILTER_INITIAL_CAPACITY;
+  while (numTerms >= IndexSpec_BloomFilterThreshold(capacity)) {
+    capacity *= 2;
+  }
+  return capacity;
+}
+
+static void IndexSpec_ClearBloomFilter(IndexSpec *sp) {
+  if (sp->termFilter) {
+    BloomFilter_Free(sp->termFilter);
+    sp->termFilter = NULL;
+  }
+  sp->termFilterCapacity = 0;
+  sp->termFilterItems = 0;
+}
+
+static void IndexSpec_RebuildBloomFilter(IndexSpec *sp, size_t requestedCapacity) {
+  if (!sp->terms || sp->stats.scoring.numTerms == 0) {
+    IndexSpec_ClearBloomFilter(sp);
+    return;
+  }
+
+  size_t capacity = requestedCapacity;
+  if (capacity < TERM_FILTER_INITIAL_CAPACITY) {
+    capacity = TERM_FILTER_INITIAL_CAPACITY;
+  }
+  size_t requiredCapacity = IndexSpec_BloomFilterRequiredCapacity(sp->stats.scoring.numTerms);
+  if (capacity < requiredCapacity) {
+    capacity = requiredCapacity;
+  }
+
+  struct BloomFilter *newFilter = BloomFilter_New(capacity, TERM_FILTER_TARGET_FPR);
+  RS_ASSERT(newFilter != NULL);
+
+  TrieIterator *it = Trie_Iterate(sp->terms, "", 0, 0, 1);
+  rune *rstr = NULL;
+  t_len slen = 0;
+  float score = 0;
+  size_t dist = 0;
+  size_t termLen = 0;
+  size_t numTerms = 0;
+
+  while (TrieIterator_Next(it, &rstr, &slen, NULL, &score, NULL, &dist)) {
+    char *term = runesToStr(rstr, slen, &termLen);
+    BloomFilter_Insert(newFilter, term, termLen);
+    rm_free(term);
+    ++numTerms;
+  }
+  TrieIterator_Free(it);
+
+  if (sp->termFilter) {
+    BloomFilter_Free(sp->termFilter);
+  }
+  sp->termFilter = newFilter;
+  sp->termFilterCapacity = capacity;
+  sp->termFilterItems = numTerms;
+}
+
+void IndexSpec_ReconfigureBloomFilter(IndexSpec *sp, bool enabled) {
+  if (!enabled) {
+    IndexSpec_ClearBloomFilter(sp);
+    return;
+  }
+
+  IndexSpec_RebuildBloomFilter(sp, IndexSpec_BloomFilterRequiredCapacity(sp->stats.scoring.numTerms));
+}
+
+double IndexSpec_BloomFilterEstimateFPR(const IndexSpec *sp) {
+  if (!sp->termFilter || sp->termFilterCapacity == 0 || sp->termFilterItems == 0) {
+    return 0;
+  }
+
+  const double ln2 = log(2.0);
+  const double capacity = (double)sp->termFilterCapacity;
+  const double items = (double)sp->termFilterItems;
+  const double bits = -(capacity * log(TERM_FILTER_TARGET_FPR)) / (ln2 * ln2);
+  const double hashes = (bits / capacity) * ln2;
+  const double fillRatio = 1.0 - exp((-hashes * items) / bits);
+  const double estimated = pow(fillRatio, hashes);
+
+  return estimated;
+}
+
+// === END BLOOM FILTER IMPLEMENTATION ===
+
 // Assuming the spec is properly locked for writing before calling this function.
 void IndexSpec_AddTerm(IndexSpec *sp, const char *term, size_t len) {
   int isNew = Trie_InsertStringBuffer(sp->terms, (char *)term, len, 1, 1, NULL, 1);
   if (isNew) {
     sp->stats.scoring.numTerms++;
     sp->stats.termsSize += len;
+    if (!RSGlobalConfig.bloomFilterEnabled) {
+      return;
+    }
+
+    if (!sp->termFilter || sp->termFilterItems >= IndexSpec_BloomFilterThreshold(sp->termFilterCapacity)) {
+      size_t requestedCapacity = sp->termFilter ? sp->termFilterCapacity * 2 : sp->stats.scoring.numTerms;
+      IndexSpec_RebuildBloomFilter(sp, requestedCapacity);
+      return;
+    }
+
+    BloomFilter_Insert(sp->termFilter, term, len);
+    ++sp->termFilterItems;
   }
 }
 
@@ -2041,6 +2149,9 @@ static void IndexSpec_FreeUnlinkedData(IndexSpec *spec) {
   if (spec->suffix) {
     TrieType_Free(spec->suffix);
   }
+
+  // Free Bloom filter
+  IndexSpec_ClearBloomFilter(spec);
 
   // Free spec name
   HiddenString_Free(spec->specName, true);
@@ -2338,6 +2449,11 @@ static void initializeIndexSpec(IndexSpec *sp, const HiddenString *name, IndexFl
 
   sp->fieldIdToIndex = array_new(t_fieldIndex, 0);
   sp->terms = NewTrie(NULL, Trie_Sort_Lex);
+  // Bloom filter will be lazily initialized on first term insertion
+  // to avoid pre-allocating memory for empty indexes
+  sp->termFilter = NULL;
+  sp->termFilterCapacity = 0;
+  sp->termFilterItems = 0;
 
   IndexSpec_InitLock(sp);
   // First, initialise fields IndexError for every field
@@ -3408,6 +3524,10 @@ IndexSpec *IndexSpec_RdbLoad(RedisModuleIO *rdb, int encver, bool useSst, QueryE
     }
   }
 
+  if (RSGlobalConfig.bloomFilterEnabled) {
+    IndexSpec_ReconfigureBloomFilter(sp, true);
+  }
+
   return sp;
 
 cleanup:
@@ -4143,6 +4263,29 @@ void Indexes_List(RedisModule_Reply* reply, bool obfuscate) {
   RedisModule_Reply_SetEnd(reply);
   RedisModule_EndReply(reply);
 }
+
+// Assuming the GIL is held by the caller.
+void Indexes_ReconfigureBloomFilters(bool enabled) {
+  if (!specDict_g) {
+    return;
+  }
+
+  dictIterator *iter = dictGetIterator(specDict_g);
+  dictEntry *entry = NULL;
+  while ((entry = dictNext(iter))) {
+    StrongRef spec_ref = dictGetRef(entry);
+    IndexSpec *sp = StrongRef_Get(spec_ref);
+    if (!sp) {
+      continue;
+    }
+
+    IndexSpec_AcquireWriteLock(sp);
+    IndexSpec_ReconfigureBloomFilter(sp, enabled);
+    IndexSpec_ReleaseWriteLock(sp);
+  }
+  dictReleaseIterator(iter);
+}
+
 ///////////////////////////////////////////////////////////////////////////////////////////////
 
 // Debug Scanner Functions

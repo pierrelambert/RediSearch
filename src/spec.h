@@ -310,6 +310,9 @@ typedef struct IndexSpec {
   Trie *suffix;                   // Trie of TEXT suffix tokens of terms. Used for contains queries
   t_fieldMask suffixMask;         // Mask of all fields that support contains query
   dict *keysDict;                 // Inverted indexes dictionary of all TEXT terms
+  struct BloomFilter *termFilter; // Bloom filter for fast term rejection
+  size_t termFilterCapacity;      // Expected unique terms supported by the current bloom filter
+  size_t termFilterItems;         // Unique terms inserted into the current bloom filter
 
   DocTable docs;                  // Contains metadata of all documents
 
@@ -640,6 +643,8 @@ void IndexSpec_Free(IndexSpec *spec);
 //---------------------------------------------------------------------------------------------
 
 void IndexSpec_AddTerm(IndexSpec *sp, const char *term, size_t len);
+void IndexSpec_ReconfigureBloomFilter(IndexSpec *sp, bool enabled);
+double IndexSpec_BloomFilterEstimateFPR(const IndexSpec *sp);
 
 IndexSpec *NewIndexSpec(const HiddenString *name);
 IndexSpec *IndexSpec_RdbLoad(RedisModuleIO *rdb, int encver, bool useSst, QueryError *status);
@@ -734,6 +739,7 @@ void Indexes_DeleteMatchingWithSchemaRules(RedisModuleCtx *ctx, RedisModuleStrin
 void Indexes_ReplaceMatchingWithSchemaRules(RedisModuleCtx *ctx, RedisModuleString *from_key,
                                             RedisModuleString *to_key);
 void Indexes_List(RedisModule_Reply* reply, bool obfuscate);
+void Indexes_ReconfigureBloomFilters(bool enabled);
 
 //---------------------------------------------------------------------------------------------
 

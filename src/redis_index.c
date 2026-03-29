@@ -17,6 +17,7 @@
 #include "util/misc.h"
 #include "tag_index.h"
 #include "rmalloc.h"
+#include "redisearch_rs/headers/bloom_filter.h"
 #include <stdio.h>
 
 static inline void updateTime(SearchTime *searchTime, int32_t durationNS) {
@@ -158,6 +159,17 @@ void SearchCtx_Free(RedisSearchCtx *sctx) {
 
 static InvertedIndex *openIndexKeysDict(const RedisSearchCtx *ctx, CharBuf *termKey,
                                         bool write, bool *outIsNew) {
+  // Fast path: check Bloom filter for non-existent terms (read-only mode)
+  if (!write && ctx->spec->termFilter) {
+    if (!BloomFilter_Contains(ctx->spec->termFilter, termKey->buf, termKey->len)) {
+      // Term definitely doesn't exist - fast rejection
+      if (outIsNew) {
+        *outIsNew = false;
+      }
+      return NULL;
+    }
+  }
+
   InvertedIndex *idx = dictFetchValue(ctx->spec->keysDict, termKey);
   if (outIsNew) {
     *outIsNew = idx == NULL;

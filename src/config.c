@@ -97,6 +97,7 @@ configPair_t __configPairs[] = {
   {"_MAX_TRIM_DELAY_MS",               "search-_max-trim-delay-ms"},
   {"_TRIMMING_STATE_CHECK_DELAY_MS",   "search-_trimming-state-check-delay-ms"},
   {"_SIMULATE_IN_FLEX",                "search-_simulate-in-flex"},
+  {"BLOOM_FILTER_ENABLED",             "search-bloom-filter-enabled"},
 };
 
 static const char* FTConfigNameToConfigName(const char *name) {
@@ -275,6 +276,24 @@ static int set_monitor_expiration(const char *name, int val, void *privdata,
       }
     }
     dictReleaseIterator(iter);
+  }
+
+  return REDISMODULE_OK;
+}
+
+// When changing bloom filter setting, reconfigure bloom filters for all existing indexes.
+static int set_bloom_filter_enabled(const char *name, int val, void *privdata,
+                                    RedisModuleString **err) {
+  REDISMODULE_NOT_USED(name);
+  REDISMODULE_NOT_USED(err);
+
+  bool *bloomFilterEnabled = (bool *)privdata;
+  bool oldVal = *bloomFilterEnabled;
+  *bloomFilterEnabled = val;
+
+  // Update all existing indexes if value changed
+  if (oldVal != val) {
+    Indexes_ReconfigureBloomFilters(val);
   }
 
   return REDISMODULE_OK;
@@ -1265,6 +1284,9 @@ CONFIG_GETTER(getTrimmingStateCheckDelay) {
 CONFIG_BOOLEAN_SETTER(setDebugSimulateInFlex, simulateInFlex)
 CONFIG_BOOLEAN_GETTER(getDebugSimulateInFlex, simulateInFlex, 0)
 
+// BLOOM_FILTER_ENABLED getter (setter is set_bloom_filter_enabled above)
+CONFIG_BOOLEAN_GETTER(getBloomFilterEnabled, bloomFilterEnabled, 0)
+
 // ON_OOM
 CONFIG_SETTER(setOnOom) {
   size_t len;
@@ -1652,6 +1674,10 @@ RSConfigOptions RSGlobalConfigOptions = {
          .setValue = setDebugSimulateInFlex,
          .getValue = getDebugSimulateInFlex,
          .flags = RSCONFIGVAR_F_IMMUTABLE},
+        {.name = "BLOOM_FILTER_ENABLED",
+         .helpText = "Enable/disable bloom filter for fast term rejection (default: true)",
+         .setValue = set_bloom_filter_enabled,
+         .getValue = getBloomFilterEnabled},
         {.name = NULL}}};
 
 void RSConfigOptions_AddConfigs(RSConfigOptions *src, RSConfigOptions *dst) {

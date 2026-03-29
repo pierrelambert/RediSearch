@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "bloom_filter",
     "build_utils",
     "c_entrypoint/*",
     "c_wrappers/*",
@@ -84,6 +85,7 @@ license-file = "../../LICENSE.txt"
 publish = false
 
 [workspace.dependencies]
+bloom_filter = { path = "./bloom_filter" }
 buffer = { path = "./c_wrappers/buffer" }
 build_utils = { path = "./build_utils" }
 c_ffi_utils = { path = "./c_entrypoint/c_ffi_utils" }

@@ -216,6 +216,8 @@ typedef struct {
   bool monitorExpiration;
   // Percentage of available memory to use for disk write buffer (0-100).
   uint8_t diskBufferPercentage;
+  // Enable/disable bloom filter for fast term rejection
+  bool bloomFilterEnabled;
 } RSConfig;
 
 typedef enum {
@@ -406,6 +408,7 @@ char *getRedisConfigValue(RedisModuleCtx *ctx, const char* confName);
     .simulateInFlex = false,                                                   \
     .monitorExpiration = true,                                                 \
     .diskBufferPercentage = DEFAULT_DISK_BUFFER_PERCENTAGE,                    \
+    .bloomFilterEnabled = true,                                                \
   }
 
 #define REDIS_ARRAY_LIMIT 7
