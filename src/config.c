@@ -88,6 +88,7 @@ configPair_t __configPairs[] = {
   {"WORKERS_PRIORITY_BIAS_THRESHOLD", "search-workers-priority-bias-threshold"},
   {"WORKER_THREADS",                  ""},
   {"ENABLE_UNSTABLE_FEATURES",        "search-enable-unstable-features"},
+  {"SQL_ENABLED",                     "search-sql-enabled"},
   {"BM25STD_TANH_FACTOR",             "search-bm25std-tanh-factor"},
   {"_BG_INDEX_OOM_PAUSE_TIME",         "search-_bg-index-oom-pause-time"},
   {"INDEXER_YIELD_EVERY_OPS",         "search-indexer-yield-every-ops"},
@@ -1166,6 +1167,10 @@ CONFIG_GETTER(getIndexCursorLimit) {
 // ENABLE_UNSTABLE_FEATURES
 CONFIG_BOOLEAN_SETTER(set_EnableUnstableFeatures, enableUnstableFeatures)
 CONFIG_BOOLEAN_GETTER(get_EnableUnstableFeatures, enableUnstableFeatures, 0)
+
+// SQL_ENABLED
+CONFIG_BOOLEAN_SETTER(setSqlEnabled, sqlEnabled)
+CONFIG_BOOLEAN_GETTER(getSqlEnabled, sqlEnabled, 0)
 
 // INDEXER_YIELD_EVERY_OPS
 CONFIG_SETTER(setIndexerYieldEveryOps) {

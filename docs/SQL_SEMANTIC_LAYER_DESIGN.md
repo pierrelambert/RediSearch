@@ -52,61 +52,75 @@
 
 ## 2. SQL Subset Support
 
-### Phase 1: MVP (Core Queries)
+### Supported Features
 
-```sql
--- Basic SELECT
-SELECT * FROM idx
-SELECT field1, field2 FROM idx
+**SELECT clause**
+- `SELECT *`
+- `SELECT field1, field2`
+- `SELECT field AS alias`
+- `SELECT DISTINCT field1, field2`
+- Aggregate functions exposed by RediSearch:
+  - `COUNT(*)`, `COUNT(field)`
+  - `SUM(field)`, `AVG(field)`, `MIN(field)`, `MAX(field)`
+  - `COUNT_DISTINCT(field)`, `COUNT_DISTINCTISH(field)`, `STDDEV(field)`
+  - `QUANTILE(field, percentile)`
+  - `TOLIST(field)`
+  - `FIRST_VALUE(field, sort_field)`
+  - `FIRST_VALUE(field, sort_field, 'ASC'|'DESC')`
+  - `RANDOM_SAMPLE(field, size)`
+  - `HLL(field)`, `HLL_SUM(field)`
 
--- WHERE clause (equality, comparison)
-WHERE field = 'value'
-WHERE field > 100
-WHERE field < 100
-WHERE field >= 100
-WHERE field <= 100
-WHERE field BETWEEN 10 AND 100
+**WHERE clause**
+- Comparison operators: `=`, `!=` / `<>`, `>`, `>=`, `<`, `<=`
+- Ranges and sets: `BETWEEN a AND b`, `IN (...)`, `NOT IN (...)`
+- Pattern matching: `LIKE`, `NOT LIKE`
+- Null checks: `IS NULL`, `IS NOT NULL`
+- Boolean logic: `AND`, `OR`, `NOT`
 
--- Sorting and pagination
-ORDER BY field ASC
-ORDER BY field DESC
-LIMIT n
-LIMIT n OFFSET m
-```
+**ORDER BY**
+- `ORDER BY field ASC|DESC`
+- `ORDER BY a ASC, b DESC` for aggregate queries translated with `FT.AGGREGATE`
+- Vector distance operators using pgvector-style syntax:
+  - `ORDER BY embedding <-> '[...]'` (L2)
+  - `ORDER BY embedding <=> '[...]'` (Cosine)
+  - `ORDER BY embedding <#> '[...]'` (Inner Product)
 
-### Phase 2: Enhanced (Boolean Logic & Aggregations)
+**GROUP BY / HAVING**
+- `GROUP BY field1, field2`
+- `HAVING aggregate_condition`
+- `HAVING` supports aggregate comparisons plus `AND` / `OR`, and resolves aggregate aliases when building `FILTER`
 
-```sql
--- Pattern matching
-WHERE field LIKE '%word%'
-WHERE field IN ('a', 'b', 'c')
+**LIMIT / OFFSET**
+- `LIMIT n`
+- `LIMIT n OFFSET m`
 
--- Boolean logic
-WHERE field1 = 'a' AND field2 > 10
-WHERE field1 = 'a' OR field2 = 'b'
-WHERE NOT field = 'value'
+**Vector Search (pgvector syntax)**
+- `SELECT ... ORDER BY embedding <-> '[0.1, 0.2]' LIMIT 10`
+  → `FT.SEARCH ... "*=>[KNN 10 @embedding $BLOB]" PARAMS 2 BLOB <vector>`
+- `SELECT ... WHERE category = 'electronics' ORDER BY embedding <=> '[0.1, 0.2]' LIMIT 5`
+  → `FT.SEARCH ... "@category:{electronics}=>[KNN 5 @embedding $BLOB]" PARAMS 2 BLOB <vector>`
+- Supported distance operators: `<->` (L2), `<=>` (Cosine), `<#>` (Inner Product)
+- `LIMIT` determines `K`; without `LIMIT`, `K` defaults to `10`
 
--- Aggregations
-SELECT COUNT(*) FROM idx
-SELECT AVG(price), SUM(quantity) FROM idx GROUP BY category
-SELECT field, COUNT(*) FROM idx GROUP BY field
-SELECT MAX(price), MIN(price) FROM idx WHERE category = 'electronics'
-```
+**Hybrid Search (SQL extension via `OPTION`)**
+- `SELECT ... WHERE category = 'electronics' ORDER BY embedding <-> '[...]' LIMIT 10 OPTION (vector_weight = 0.7, text_weight = 0.3)`
+  → `FT.HYBRID`
+- Weighted scoring between vector and structured-filter results is configurable through `vector_weight` and `text_weight`
+- If only one weight is provided, the other defaults to `0.5`
 
-### Phase 3: Advanced (Multi-Index & Subqueries)
+**Translation Cache**
+- Thread-safe LRU cache for SQL → RQL translations
+- Cache keys are schema-aware and include field-shape metadata
+- Cache statistics include hits, misses, and hit rate
 
-```sql
--- JOIN (translated to multiple queries + client-side merge)
-SELECT a.*, b.name FROM idx1 a JOIN idx2 b ON a.ref = b.id
+### Not Yet Supported
 
--- HAVING clause
-SELECT category, AVG(price) FROM idx GROUP BY category HAVING AVG(price) > 100
-
--- Subqueries (limited support, document constraints)
-SELECT * FROM idx WHERE category IN (SELECT DISTINCT category FROM idx WHERE featured = 1)
-```
-
-**Note**: JOINs and subqueries are complex features that require careful design. Phase 3 may implement these as multi-query patterns with documented limitations.
+- `JOIN` / multi-index queries
+- Subqueries
+- `UNION`
+- Window functions
+- Dedicated full-text predicate syntax such as `MATCH`, `FTS(...)`, or `CONTAINS`
+- Geo queries
 
 ---
 
@@ -118,48 +132,70 @@ SELECT * FROM idx WHERE category IN (SELECT DISTINCT category FROM idx WHERE fea
 |-----|-----------------|-------|
 | `SELECT *` | No RETURN clause | Returns all indexed fields |
 | `SELECT a, b` | `RETURN 2 a b` | Explicit field selection |
-| `SELECT COUNT(*)` | → `FT.AGGREGATE ... REDUCE COUNT 0` | Switches to aggregate |
-| `SELECT AVG(field)` | → `FT.AGGREGATE ... REDUCE AVG 1 @field` | |
-| `SELECT SUM(field)` | → `FT.AGGREGATE ... REDUCE SUM 1 @field` | |
-| `SELECT MIN(field)` | → `FT.AGGREGATE ... REDUCE MIN 1 @field` | |
-| `SELECT MAX(field)` | → `FT.AGGREGATE ... REDUCE MAX 1 @field` | |
+| `SELECT a AS alias` | `RETURN 3 a AS alias` | Alias is emitted in the RETURN clause |
+| `SELECT DISTINCT a, b` | `FT.AGGREGATE ... GROUPBY 2 @a @b` | `DISTINCT` switches to aggregate mode |
+| `SELECT COUNT(*)` | `FT.AGGREGATE ... REDUCE COUNT 0 AS count` | Aggregate without `GROUP BY` uses `GROUPBY 0` |
+| `SELECT COUNT(field)` | `FT.AGGREGATE ... REDUCE COUNT 1 @field AS count_field` | Counts non-null field values |
+| `SELECT SUM(field)` | `FT.AGGREGATE ... REDUCE SUM 1 @field AS sum_field` | |
+| `SELECT AVG(field)` | `FT.AGGREGATE ... REDUCE AVG 1 @field AS avg_field` | |
+| `SELECT MIN(field)` | `FT.AGGREGATE ... REDUCE MIN 1 @field AS min_field` | |
+| `SELECT MAX(field)` | `FT.AGGREGATE ... REDUCE MAX 1 @field AS max_field` | |
+| `SELECT COUNT_DISTINCT(field)` | `FT.AGGREGATE ... REDUCE COUNT_DISTINCT 1 @field AS count_distinct_field` | Exact cardinality |
+| `SELECT COUNT_DISTINCTISH(field)` | `FT.AGGREGATE ... REDUCE COUNT_DISTINCTISH 1 @field AS count_distinctish_field` | Approximate cardinality |
+| `SELECT STDDEV(field)` | `FT.AGGREGATE ... REDUCE STDDEV 1 @field AS stddev_field` | |
+| `SELECT QUANTILE(field, 0.99)` | `FT.AGGREGATE ... REDUCE QUANTILE 2 @field 0.99 AS quantile_99_field` | Percentile must be between `0.0` and `1.0` |
+| `SELECT TOLIST(field)` | `FT.AGGREGATE ... REDUCE TOLIST 1 @field AS tolist_field` | Collects values |
+| `SELECT FIRST_VALUE(field, sort_field, 'DESC')` | `FT.AGGREGATE ... REDUCE FIRST_VALUE 4 @field BY @sort_field DESC AS first_value_field` | SQL surface uses simplified argument syntax |
+| `SELECT RANDOM_SAMPLE(field, 5)` | `FT.AGGREGATE ... REDUCE RANDOM_SAMPLE 2 @field 5 AS random_sample_5_field` | Sample size must be between `1` and `1000` |
+| `SELECT HLL(field)` | `FT.AGGREGATE ... REDUCE HLL 1 @field AS hll_field` | Raw HyperLogLog value |
+| `SELECT HLL_SUM(field)` | `FT.AGGREGATE ... REDUCE HLL_SUM 1 @field AS hll_sum_field` | Merge HyperLogLog values |
 
 ### FROM Clause
 
 | SQL | RQL Translation | Notes |
 |-----|-----------------|-------|
 | `FROM idx` | Index name parameter | Required, must exist |
-| `FROM idx AS alias` | Alias tracked internally | For JOIN support |
+| `FROM idx AS alias` | Alias tracked internally | Multi-index queries are still unsupported |
 
 ### WHERE Clause
 
 | SQL | RQL Translation | Notes |
 |-----|-----------------|-------|
-| `field = 'value'` | `@field:value` | Exact match (TAG field) |
-| `field = 'hello world'` | `@field:(hello world)` | Multi-word value |
+| `field = 'value'` | `@field:{value}` | Exact TAG-style match |
+| `field = 42` | `@field:[42 42]` | Numeric equality becomes an exact range |
 | `field > 100` | `@field:[(100 +inf]` | Exclusive lower bound |
 | `field >= 100` | `@field:[100 +inf]` | Inclusive lower bound |
 | `field < 100` | `@field:[-inf (100]` | Exclusive upper bound |
 | `field <= 100` | `@field:[-inf 100]` | Inclusive upper bound |
 | `field BETWEEN a AND b` | `@field:[a b]` | Inclusive range |
+| `field != 'value'` | `-@field:{value}` | Negated TAG match |
+| `field <> 'value'` | `-@field:{value}` | Same as `!=` |
+| `field != 42` | `-@field:[42 42]` | Negated numeric equality |
+| `field IN ('a','b','c')` | `@field:{a|b|c}` | String-set membership |
+| `field NOT IN ('a','b')` | `-@field:{a|b}` | Negated TAG set |
+| `field IN (10,20,30)` | `(@field:[10 10]|@field:[20 20]|@field:[30 30])` | Numeric `IN` expands to OR of exact ranges |
+| `field NOT IN (10,20)` | `-(@field:[10 10]|@field:[20 20])` | Negated numeric OR |
 | `field LIKE '%word%'` | `@field:*word*` | Contains pattern |
 | `field LIKE 'word%'` | `@field:word*` | Prefix pattern |
 | `field LIKE '%word'` | `@field:*word` | Suffix pattern |
-| `field IN ('a','b','c')` | `@field:(a\|b\|c)` | OR alternatives |
+| `field NOT LIKE '%word%'` | `-@field:*word*` | Negated pattern |
 | `a AND b` | `(@a) (@b)` | Implicit intersection |
 | `a OR b` | `(@a) \| (@b)` | Union operator |
 | `NOT condition` | `-(@condition)` | Negation prefix |
-| `field IS NULL` | `-@field:*` | Field not present |
-| `field IS NOT NULL` | `@field:*` | Field exists |
+| `field IS NULL` | `ismissing(@field)` | Field missing |
+| `field IS NOT NULL` | `-ismissing(@field)` | Field present |
 
 ### ORDER BY Clause
 
 | SQL | RQL Translation | Notes |
 |-----|-----------------|-------|
-| `ORDER BY field` | `SORTBY field` | Default ASC |
+| `ORDER BY field` | `SORTBY field ASC` | Default direction is ascending |
 | `ORDER BY field ASC` | `SORTBY field ASC` | Explicit ascending |
 | `ORDER BY field DESC` | `SORTBY field DESC` | Descending order |
-| `ORDER BY a, b` | `SORTBY a ASC b ASC` | Multi-field sort |
+| `ORDER BY a ASC, b DESC` | `FT.AGGREGATE ... SORTBY 4 @a ASC @b DESC` | Multi-column sort is supported for aggregate queries |
+| `ORDER BY embedding <-> '[...]'` | `FT.SEARCH ... "*=>[KNN k @embedding $BLOB]" PARAMS 2 BLOB <vector>` | L2 / Euclidean vector search |
+| `ORDER BY embedding <=> '[...]'` | `FT.SEARCH ... "*=>[KNN k @embedding $BLOB]" PARAMS 2 BLOB <vector>` | Cosine vector search |
+| `ORDER BY embedding <#> '[...]'` | `FT.SEARCH ... "*=>[KNN k @embedding $BLOB]" PARAMS 2 BLOB <vector>` | Inner-product vector search |
 
 ### LIMIT/OFFSET Clause
 
@@ -175,6 +211,30 @@ SELECT * FROM idx WHERE category IN (SELECT DISTINCT category FROM idx WHERE fea
 |-----|-----------------|
 | `GROUP BY field` | `GROUPBY 1 @field` |
 | `GROUP BY a, b` | `GROUPBY 2 @a @b` |
+
+### HAVING Clause
+
+| SQL | RQL Translation | Notes |
+|-----|-----------------|-------|
+| `HAVING COUNT(*) > 5` | `FILTER @count>5` | Applied after `GROUPBY` |
+| `SELECT category, COUNT(*) AS cnt ... HAVING COUNT(*) >= 5` | `FILTER @cnt>=5` | Aggregate aliases are resolved automatically |
+| `HAVING COUNT(*) > 10 OR SUM(price) > 1000` | `FILTER (@count>10 || @sum_price>1000)` | Boolean logic uses `&&` / `||` in `FILTER` |
+
+### Vector Search / KNN
+
+| SQL | RQL Translation | Notes |
+|-----|-----------------|-------|
+| `SELECT * FROM idx ORDER BY embedding <-> '[0.1, 0.2]' LIMIT 10` | `FT.SEARCH idx "*=>[KNN 10 @embedding $BLOB]" PARAMS 2 BLOB [0.1, 0.2]` | Pure KNN query |
+| `SELECT * FROM idx WHERE category = 'electronics' ORDER BY embedding <=> '[0.1, 0.2]' LIMIT 5` | `FT.SEARCH idx "@category:{electronics}=>[KNN 5 @embedding $BLOB]" PARAMS 2 BLOB [0.1, 0.2]` | Filter + KNN |
+| `SELECT * FROM idx ORDER BY embedding <#> '[0.1, 0.2]'` | `FT.SEARCH idx "*=>[KNN 10 @embedding $BLOB]" PARAMS 2 BLOB [0.1, 0.2]` | `LIMIT` omitted → `K = 10` |
+
+### Hybrid Search / FT.HYBRID
+
+| SQL | RQL Translation | Notes |
+|-----|-----------------|-------|
+| `SELECT * FROM idx ORDER BY embedding <-> '[0.1, 0.2]' LIMIT 10 OPTION (vector_weight = 0.7, text_weight = 0.3)` | `FT.HYBRID idx "*" VECTOR embedding K 10 VECTOR_BLOB [0.1, 0.2] WEIGHT 0.7 TEXT 0.3 LIMIT 0 10` | `OPTION` switches the command to `FT.HYBRID` |
+| `SELECT * FROM idx WHERE category = 'electronics' ORDER BY embedding <=> '[0.1, 0.2]' LIMIT 5 OPTION (vector_weight = 0.6, text_weight = 0.4)` | `FT.HYBRID idx "@category:{electronics}" VECTOR embedding K 5 VECTOR_BLOB [0.1, 0.2] WEIGHT 0.6 TEXT 0.4 LIMIT 0 5` | Structured filters are preserved in the hybrid query string |
+| `OPTION (vector_weight = 0.6)` | `vector_weight = 0.6`, `text_weight = 0.5` | Unspecified weight defaults to `0.5` |
 
 ---
 
@@ -459,7 +519,7 @@ fn test_simple_select_star() {
 #[test]
 fn test_where_equality() {
     let result = translate("SELECT * FROM idx WHERE status = 'active'").unwrap();
-    assert_eq!(result.query_string, "@status:active");
+    assert_eq!(result.query_string, "@status:{active}");
 }
 
 #[test]
@@ -544,68 +604,72 @@ FT.CONFIG SET SQL_ENABLED true|false
 
 ### Rollout Phases
 
-> Status note (2026-03-29): this section is roadmap guidance, not current
-> portfolio status. The shipped FT.SQL posture in this program is the hardened
-> experimental/beta subset with `SQL_ENABLED` off by default; the phase bullets
-> below are not claims of completed Phase 2/3 delivery.
+> Status note (2026-03-30): the earlier phase-based feature roadmap in this
+> document is historical. The current source of truth for feature surface is the
+> supported subset documented in Sections 2 and 3. The rollout bullets below are
+> about exposure and operational posture, not about withholding already-
+> implemented SQL features.
 
 **Alpha** (internal testing):
 - Feature flag off by default
-- Limited to Phase 1 SQL subset
+- Limited to the currently audited supported subset
 - Extensive logging for debugging
 
 **Beta** (opt-in users):
 - Feature flag configurable
-- Hardened supported subset; additional roadmap items can be added incrementally
+- Hardened supported subset documented above
 - Performance monitoring
 
 **GA** (general availability):
 - Feature flag on by default
-- Roadmap target, not current audited status
+- Requires separate validation and rollout sign-off
 - Additional SQL surface area only after separate validation
 
 ---
 
 ## 10. Open Questions / Future Work
 
-### Full-Text Search Syntax
+### Resolved: Full-Text Search Surface
 
-**Question**: How to express full-text search in SQL?
+**Decision**: the current SQL surface does **not** introduce a dedicated
+full-text predicate such as `MATCH`, `FTS(...)`, or `CONTAINS`.
 
-**Option A**: MATCH...AGAINST (MySQL-style)
+- Exact matching remains `field = 'value'` / `IN (...)` on TAG-capable fields
+- Dedicated full-text predicate syntax remains outside the supported subset
+- This keeps the implemented surface aligned with the current parser and
+  translator behavior
+
+### Resolved: Vector Search Syntax
+
+**Decision**: vector search uses pgvector-style operators in `ORDER BY`.
+
 ```sql
-SELECT * FROM idx WHERE MATCH(body) AGAINST('search terms')
+SELECT * FROM idx ORDER BY embedding <-> '[0.1, 0.2, ...]' LIMIT 10
+SELECT * FROM idx ORDER BY embedding <=> '[0.1, 0.2, ...]' LIMIT 10
+SELECT * FROM idx ORDER BY embedding <#> '[0.1, 0.2, ...]' LIMIT 10
 ```
 
-**Option B**: FTS function
+- `<->` = L2 distance
+- `<=>` = Cosine distance
+- `<#>` = Inner Product
+- Translation target is RediSearch KNN syntax via `FT.SEARCH ... =>[KNN ...]`
+- The query operator records user intent; the index configuration still decides the effective distance metric at execution time
+
+### Resolved: Hybrid Search Syntax
+
+**Decision**: weighted hybrid vector search uses the SQL `OPTION` clause.
+
 ```sql
-SELECT * FROM idx WHERE FTS(body, 'search terms')
+SELECT * FROM idx
+WHERE category = 'electronics'
+ORDER BY embedding <-> '[0.1, 0.2, ...]'
+LIMIT 10
+OPTION (vector_weight = 0.7, text_weight = 0.3)
 ```
 
-**Option C**: Special operator
-```sql
-SELECT * FROM idx WHERE body CONTAINS 'search terms'
-```
-
-**Recommendation**: Defer to Phase 3; use standard equality for now, which maps to exact TAG matching.
-
-### Vector Search Syntax
-
-**Question**: How to express vector similarity in SQL?
-
-**Potential syntax**:
-```sql
--- Option A: SIMILAR TO operator
-SELECT * FROM idx WHERE embedding SIMILAR TO [0.1, 0.2, ...] LIMIT 10
-
--- Option B: KNN function
-SELECT * FROM idx WHERE KNN(embedding, [0.1, 0.2, ...], 10)
-
--- Option C: Distance function in ORDER BY
-SELECT * FROM idx ORDER BY VECTOR_DISTANCE(embedding, [0.1, 0.2, ...]) LIMIT 10
-```
-
-**Recommendation**: Requires research into SQL extensions for vector databases. Defer to Phase 3.
+- `OPTION` requires a vector `ORDER BY`
+- The translator emits `FT.HYBRID`
+- `vector_weight` and `text_weight` default to `0.5` when omitted
 
 ### Geospatial Queries
 
@@ -619,7 +683,7 @@ SELECT * FROM idx WHERE DISTANCE(location, POINT(-122.4, 37.8)) < 10 km
 SELECT * FROM idx WHERE location WITHIN BOX(...)
 ```
 
-**Recommendation**: Follow PostGIS conventions where applicable. Defer to Phase 3.
+**Recommendation**: still future work; no SQL geo surface is implemented today.
 
 ### Schema Discovery
 
@@ -631,7 +695,7 @@ DESCRIBE idx;
 SHOW COLUMNS FROM idx;
 ```
 
-**Recommendation**: Nice-to-have for Phase 2. Maps to `FT._LIST` and `FT.INFO`.
+**Recommendation**: still future work; likely maps to `FT._LIST` and `FT.INFO` if exposed later.
 
 ---
 
@@ -649,7 +713,7 @@ ORDER BY price ASC
 LIMIT 20
 
 -- Translates to
-FT.SEARCH products "@category:electronics @price:[100 500]"
+FT.SEARCH products "@category:{electronics} @price:[100 500]"
     RETURN 3 name price category
     SORTBY price ASC
     LIMIT 0 20
@@ -665,7 +729,7 @@ WHERE status = 'active'
 GROUP BY country
 
 -- Translates to
-FT.AGGREGATE users "@status:active"
+FT.AGGREGATE users "@status:{active}"
     GROUPBY 1 @country
     REDUCE COUNT 0 AS count
     REDUCE AVG 1 @age AS avg_age
@@ -682,7 +746,7 @@ WHERE (category = 'tech' OR category = 'science')
 
 -- Translates to
 FT.SEARCH articles
-    "((@category:tech) | (@category:science)) -(@status:draft) @published_date:[2024-01-01 +inf]"
+    "((@category:{tech}) | (@category:{science})) -(@status:{draft}) @published_date:[2024-01-01 +inf]"
 ```
 
 ---
@@ -691,13 +755,13 @@ FT.SEARCH articles
 
 | Feature | Reason | Alternative |
 |---------|--------|-------------|
-| `JOIN` (Phase 1-2) | Multiple index queries not supported | Use application-level joins |
+| `JOIN` | Multiple index queries are not supported | Use application-level joins |
 | `UNION` | No equivalent in RQL | Run multiple queries |
-| `DISTINCT` | Implicit in GROUP BY | Use `GROUP BY field` |
 | `CASE WHEN` | No conditional expressions in RQL | Use application logic |
+| `MATCH` / `FTS(...)` / `CONTAINS` | No dedicated full-text predicate syntax in the current SQL surface | Use exact TAG-style matching where applicable |
 | `Subqueries` | Query composition not supported | Flatten to single query |
 | `Window Functions` | No OVER/PARTITION BY | Use FT.AGGREGATE |
-| `HAVING` (Phase 1) | Filter after GROUP BY | Phase 2 feature |
+| `Geo queries` | No SQL geo predicate syntax is implemented | Use RediSearch geo commands directly |
 | `OUTER JOIN` | Only intersection semantics | Not planned |
 
 ---
