@@ -103,6 +103,22 @@ pub(crate) struct TreeStats {
     pub empty_leaves: CheckedCount,
 }
 
+/// Aggregate compaction telemetry for a [`NumericRangeTree`].
+///
+/// These counters are cumulative and let production surfaces explain what the
+/// GC compaction path has reclaimed over the lifetime of the tree.
+#[derive(Debug, Default, Clone, Copy)]
+pub(crate) struct CompactionStats {
+    /// Number of times sparse-tree compaction ran.
+    pub runs: usize,
+    /// Total bytes reclaimed by trimming, merging, and slab compaction.
+    pub bytes_reclaimed: usize,
+    /// Total number of sibling leaf nodes collapsed by merge operations.
+    pub nodes_merged: usize,
+    /// Total number of empty leaves trimmed from the tree.
+    pub leaves_trimmed: usize,
+}
+
 /// A numeric range tree for efficient range queries over numeric values.
 ///
 /// The tree organizes documents by their numeric field values into a balanced
@@ -142,13 +158,15 @@ pub struct NumericRangeTree {
     nodes: NodeArena,
     /// Aggregate statistics for the tree.
     stats: TreeStats,
+    /// Cumulative compaction telemetry.
+    compaction_stats: CompactionStats,
     /// The last document ID added to the tree.
     last_doc_id: t_docId,
     /// Revision ID, incremented when the tree structure changes (splits/rotations).
     ///
     /// When `revision_id != 0`, it indicates the tree nodes have changed and
     /// concurrent iteration may not be safe. Iterators like
-    /// `NumericRangeTreeIterator` should check this value and abort if it
+    /// [`NumericRangeTreeIterator`](crate::NumericRangeTreeIterator) should check this value and abort if it
     /// changes during iteration, as the tree structure they were traversing
     /// may no longer be valid.
     revision_id: u32,
@@ -210,6 +228,7 @@ impl NumericRangeTree {
                 inverted_indexes_size: CheckedCount::new(inverted_indexes_size),
                 empty_leaves: CheckedCount::new(1),
             },
+            compaction_stats: CompactionStats::default(),
             last_doc_id: 0,
             revision_id: 0,
             unique_id: TreeUniqueId::next(),
@@ -287,6 +306,26 @@ impl NumericRangeTree {
     /// Get the number of empty leaves (for GC tracking).
     pub const fn empty_leaves(&self) -> usize {
         self.stats.empty_leaves.get()
+    }
+
+    /// Get the number of sparse-tree compaction runs.
+    pub const fn compaction_runs(&self) -> usize {
+        self.compaction_stats.runs
+    }
+
+    /// Get the total number of bytes reclaimed by compaction.
+    pub const fn bytes_reclaimed(&self) -> usize {
+        self.compaction_stats.bytes_reclaimed
+    }
+
+    /// Get the total number of sibling leaf nodes merged away by compaction.
+    pub const fn nodes_merged(&self) -> usize {
+        self.compaction_stats.nodes_merged
+    }
+
+    /// Get the total number of empty leaves trimmed by compaction.
+    pub const fn leaves_trimmed(&self) -> usize {
+        self.compaction_stats.leaves_trimmed
     }
 
     /// Returns an iterator over all nodes in the tree (depth-first traversal).

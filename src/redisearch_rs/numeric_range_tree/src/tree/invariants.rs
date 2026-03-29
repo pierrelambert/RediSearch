@@ -13,6 +13,8 @@
 //! after every mutation (`add`, `trim_empty_leaves`) to catch structural
 //! violations early.
 
+use std::collections::HashSet;
+
 use inverted_index::{IndexReader, NumericFilter, RSIndexResult};
 
 use super::{AddResult, CheckedCount, NumericRangeTree, TreeStats, TrimEmptyLeavesResult};
@@ -156,33 +158,23 @@ impl NumericRangeTree {
     /// This is the ground-truth calculation used by [`check_memoized_stats`](Self::check_memoized_stats)
     /// to validate the incrementally maintained `self.stats`.
     fn compute_stats(&self) -> TreeStats {
-        let mut num_ranges: usize = 0;
-        let mut num_leaves: usize = 0;
-        let mut num_entries: usize = 0;
-        let mut inverted_indexes_size: usize = 0;
-        let mut empty_leaves: usize = 0;
+        let mut stats = TreeStats::default();
         for (_, node) in self.nodes.iter() {
             if node.is_leaf() {
-                num_leaves += 1;
+                stats.num_leaves += 1;
             }
             if let Some(range) = node.range() {
-                num_ranges += 1;
-                inverted_indexes_size += range.memory_usage();
+                stats.num_ranges += 1;
+                stats.inverted_indexes_size += range.memory_usage();
                 if node.is_leaf() {
-                    num_entries += range.num_entries();
+                    stats.num_entries += range.num_entries();
                     if range.num_docs() == 0 {
-                        empty_leaves += 1;
+                        stats.empty_leaves += 1;
                     }
                 }
             }
         }
-        TreeStats {
-            num_ranges: CheckedCount::new(num_ranges),
-            num_leaves: CheckedCount::new(num_leaves),
-            num_entries: CheckedCount::new(num_entries),
-            inverted_indexes_size: CheckedCount::new(inverted_indexes_size),
-            empty_leaves: CheckedCount::new(empty_leaves),
-        }
+        stats
     }
 
     /// Assert that every field in `self.stats` matches the ground-truth
@@ -217,6 +209,106 @@ impl NumericRangeTree {
             self.stats.empty_leaves, computed.empty_leaves,
             "empty_leaves: memoized={}, computed={}",
             self.stats.empty_leaves, computed.empty_leaves,
+        );
+
+        assert!(
+            self.stats.empty_leaves <= self.stats.num_leaves,
+            "empty_leaves cannot exceed num_leaves: empty_leaves={}, num_leaves={}",
+            self.stats.empty_leaves,
+            self.stats.num_leaves,
+        );
+        assert!(
+            self.stats.num_ranges >= self.stats.num_leaves,
+            "num_ranges must cover every leaf range: num_ranges={}, num_leaves={}",
+            self.stats.num_ranges,
+            self.stats.num_leaves,
+        );
+    }
+
+    /// Verify slab reachability/accounting invariants.
+    fn check_node_count_invariants(&self) {
+        let all_nodes: HashSet<NodeIndex> = self.nodes.iter().map(|(idx, _)| idx).collect();
+        assert_eq!(
+            all_nodes.len(),
+            self.nodes.len() as usize,
+            "slab iteration/count mismatch: iterated={}, len={}",
+            all_nodes.len(),
+            self.nodes.len(),
+        );
+        assert!(
+            all_nodes.contains(&self.root),
+            "root {:?} is missing from the slab",
+            self.root,
+        );
+
+        let mut visited = HashSet::with_capacity(all_nodes.len());
+        let mut stack = vec![self.root];
+        let mut leaf_count = 0usize;
+        let mut internal_count = 0usize;
+
+        while let Some(node_idx) = stack.pop() {
+            assert!(
+                visited.insert(node_idx),
+                "cycle or duplicate parent edge detected at node {node_idx:?}",
+            );
+
+            match self.node(node_idx) {
+                NumericRangeNode::Leaf(_) => leaf_count += 1,
+                NumericRangeNode::Internal(internal) => {
+                    internal_count += 1;
+
+                    let left = internal.left_index();
+                    let right = internal.right_index();
+                    assert_ne!(
+                        left, right,
+                        "internal node {node_idx:?} reuses the same child for both edges",
+                    );
+                    assert!(
+                        all_nodes.contains(&left),
+                        "internal node {node_idx:?} points to missing left child {left:?}",
+                    );
+                    assert!(
+                        all_nodes.contains(&right),
+                        "internal node {node_idx:?} points to missing right child {right:?}",
+                    );
+
+                    stack.push(left);
+                    stack.push(right);
+                }
+            }
+        }
+
+        assert_eq!(
+            visited, all_nodes,
+            "orphaned slab nodes detected after traversal",
+        );
+        assert_eq!(
+            leaf_count,
+            self.stats.num_leaves.get(),
+            "reachable leaf count mismatch: reachable={}, memoized={}",
+            leaf_count,
+            self.stats.num_leaves,
+        );
+        assert_eq!(
+            internal_count + 1,
+            leaf_count,
+            "binary-tree accounting mismatch: internal_nodes={}, leaf_nodes={}",
+            internal_count,
+            leaf_count,
+        );
+    }
+
+    /// Verify memory-accounting invariants.
+    fn check_memory_invariants(&self) {
+        let expected_mem_usage = std::mem::size_of::<Self>()
+            + self.nodes.mem_usage()
+            + self.compute_stats().inverted_indexes_size.get();
+        assert_eq!(
+            self.mem_usage(),
+            expected_mem_usage,
+            "mem_usage mismatch: reported={}, expected={}",
+            self.mem_usage(),
+            expected_mem_usage,
         );
     }
 
@@ -311,8 +403,10 @@ impl NumericRangeTree {
     /// Panics with a descriptive message if any invariant is violated.
     /// Called automatically after mutations when the `unittest` feature is enabled.
     pub fn check_tree_invariants(&self) {
+        self.check_node_count_invariants();
         self.check_node_invariants(self.root);
         self.check_memoized_stats();
+        self.check_memory_invariants();
     }
 
     /// Recursively check invariants for the subtree rooted at `node_idx`.

@@ -11,10 +11,40 @@
 
 #[cfg(not(miri))]
 mod proptests {
-    use inverted_index::NumericFilter;
+    use std::collections::BTreeSet;
+
+    use inverted_index::{IndexReader, NumericFilter, RSIndexResult};
     use numeric_range_tree::NumericRangeTree;
+    use proptest::{prop_assert, prop_assert_eq, prop_assume};
 
     use numeric_range_tree::test_utils::gc_all_ranges;
+
+    fn collect_matching_doc_ids(
+        tree: &NumericRangeTree,
+        filter: &NumericFilter,
+        values_by_doc_id: &[(u64, f64)],
+    ) -> Vec<u64> {
+        let mut actual = BTreeSet::new();
+        for range in tree.find(filter) {
+            let mut reader = range.reader();
+            let mut result = RSIndexResult::build_numeric(0.0).build();
+            while reader.next_record(&mut result).unwrap_or(false) {
+                // SAFETY: Numeric tree ranges always yield numeric index results.
+                let value = unsafe { result.as_numeric_unchecked() };
+                if filter.value_in_range(value) {
+                    actual.insert(result.doc_id);
+                }
+            }
+        }
+
+        let expected: BTreeSet<u64> = values_by_doc_id
+            .iter()
+            .filter_map(|(doc_id, value)| filter.value_in_range(*value).then_some(*doc_id))
+            .collect();
+
+        assert_eq!(actual, expected);
+        actual.into_iter().collect()
+    }
 
     proptest::proptest! {
         #[test]
@@ -175,6 +205,67 @@ mod proptests {
                 surviving_count as usize,
                 "after GC + trim, num_entries should be {surviving_count}"
             );
+        }
+
+        #[test]
+        fn prop_compaction_preserves_range_queries(
+            values in proptest::collection::vec(-20_000i32..20_000, 64..256),
+            queries in proptest::collection::vec((-25_000i32..25_000, 0u16..20_000, proptest::bool::ANY), 8..24),
+        ) {
+            let mut tree = NumericRangeTree::new(false);
+            let doc_values: Vec<(u64, f64)> = values
+                .iter()
+                .enumerate()
+                .map(|(idx, value)| ((idx + 1) as u64, *value as f64))
+                .collect();
+            for (doc_id, value) in &doc_values {
+                tree.add(*doc_id, *value, false, 0);
+            }
+
+            let mut sorted_values: Vec<f64> = doc_values.iter().map(|(_, value)| *value).collect();
+            sorted_values.sort_by(f64::total_cmp);
+            let keep_threshold = sorted_values[sorted_values.len() * 3 / 4];
+
+            gc_all_ranges(&mut tree, &|doc_id| {
+                doc_values[(doc_id - 1) as usize].1 >= keep_threshold
+            });
+
+            let surviving_values: Vec<(u64, f64)> = doc_values
+                .iter()
+                .copied()
+                .filter(|(_, value)| *value >= keep_threshold)
+                .collect();
+            prop_assume!(!surviving_values.is_empty());
+            prop_assume!(tree.is_sparse());
+
+            let mut before_results = Vec::with_capacity(queries.len());
+            for (raw_min, raw_width, ascending) in &queries {
+                let max = *raw_min as f64 + *raw_width as f64;
+                let filter = NumericFilter {
+                    min: *raw_min as f64,
+                    max,
+                    ascending: *ascending,
+                    ..Default::default()
+                };
+                before_results.push(collect_matching_doc_ids(&tree, &filter, &surviving_values));
+            }
+
+            let bytes_before = tree.bytes_reclaimed();
+            let runs_before = tree.compaction_runs();
+            tree.compact_if_sparse();
+            prop_assert_eq!(tree.compaction_runs(), runs_before + 1);
+            prop_assert!(tree.bytes_reclaimed() >= bytes_before);
+
+            for ((raw_min, raw_width, ascending), before_result) in queries.iter().zip(before_results) {
+                let filter = NumericFilter {
+                    min: *raw_min as f64,
+                    max: *raw_min as f64 + *raw_width as f64,
+                    ascending: *ascending,
+                    ..Default::default()
+                };
+                let after_result = collect_matching_doc_ids(&tree, &filter, &surviving_values);
+                prop_assert_eq!(before_result, after_result);
+            }
         }
     }
 }

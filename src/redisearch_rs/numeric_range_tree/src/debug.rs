@@ -53,6 +53,14 @@ pub unsafe fn debug_summary(ctx: *mut RedisModuleCtx, tree: Option<&NumericRange
     arr.long_long(tree.map_or(0, |t| t.root().max_depth() as i64));
     arr.simple_string(c"MemoryUsage");
     arr.long_long(tree.map_or(0, |t| t.mem_usage() as i64));
+    arr.simple_string(c"compactionRuns");
+    arr.long_long(tree.map_or(0, |t| t.compaction_runs() as i64));
+    arr.simple_string(c"bytesReclaimed");
+    arr.long_long(tree.map_or(0, |t| t.bytes_reclaimed() as i64));
+    arr.simple_string(c"nodesMerged");
+    arr.long_long(tree.map_or(0, |t| t.nodes_merged() as i64));
+    arr.simple_string(c"leavesTrimmed");
+    arr.long_long(tree.map_or(0, |t| t.leaves_trimmed() as i64));
 }
 
 /// Reply with a dump of the numeric index entries.

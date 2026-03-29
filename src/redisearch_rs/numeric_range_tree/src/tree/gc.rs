@@ -15,7 +15,7 @@
 
 use std::collections::HashMap;
 
-use inverted_index::{GcApplyInfo, GcScanDelta, IndexBlock, RSIndexResult};
+use inverted_index::{GcApplyInfo, GcScanDelta, IndexBlock, IndexReader, RSIndexResult};
 
 use super::{NumericRangeTree, TrimEmptyLeavesResult};
 use crate::NumericRangeNode;
@@ -63,6 +63,21 @@ pub struct CompactIfSparseResult {
     pub node_size_delta: i64,
 }
 
+/// Result of merging underutilized siblings.
+#[derive(Debug, Clone, Copy, Default)]
+struct MergeSiblingsResult {
+    /// The change in inverted index memory usage, in bytes.
+    size_delta: i64,
+    /// The change in number of ranges.
+    num_ranges_delta: i64,
+    /// The change in number of leaves.
+    num_leaves_delta: i64,
+    /// The number of sibling leaf nodes merged away.
+    nodes_merged: usize,
+    /// Whether any merges occurred.
+    changed: bool,
+}
+
 impl NumericRangeNode {
     /// Scan a single node's inverted index for GC work.
     ///
@@ -98,7 +113,7 @@ impl NumericRangeNode {
             } else {
                 &mut majority_hll
             };
-            target.add(&value.into());
+            crate::range::update_cardinality(target, value);
         };
 
         let delta = range
@@ -191,27 +206,116 @@ impl NumericRangeTree {
 
     /// Returns `true` if the tree has enough empty leaves to warrant compaction.
     ///
-    /// The threshold is: at least half the leaves are empty.
+    /// Uses an adaptive threshold based on tree density:
+    /// - For sparse trees (avg < 10 entries/leaf): 25% empty leaves triggers compaction
+    /// - For normal trees: 50% empty leaves triggers compaction
     pub const fn is_sparse(&self) -> bool {
-        self.stats.empty_leaves.get() * 2 >= self.stats.num_leaves.get()
+        if self.stats.num_leaves.get() == 0 {
+            return false;
+        }
+
+        // Calculate average entries per leaf
+        let avg_entries_per_leaf = self.stats.num_entries.get() / self.stats.num_leaves.get();
+
+        // Use adaptive threshold: lower for sparse trees
+        if avg_entries_per_leaf < 10 {
+            // Sparse tree: trigger at 25% empty
+            self.stats.empty_leaves.get() * 4 >= self.stats.num_leaves.get()
+        } else {
+            // Normal tree: trigger at 50% empty
+            self.stats.empty_leaves.get() * 2 >= self.stats.num_leaves.get()
+        }
     }
 
-    /// Conditionally trim empty leaves and compact the node slab.
+    /// Conditionally trim empty leaves, merge underutilized siblings, and compact the node slab.
     ///
-    /// Checks if the number of empty leaves exceeds half the total number of
-    /// leaves. If so, trims empty leaves and compacts the slab to reclaim freed
-    /// slots, and returns the number of bytes freed. Returns 0 if no trimming
-    /// was needed.
+    /// Checks if the number of empty leaves exceeds the adaptive threshold.
+    /// If so, trims empty leaves, merges underutilized sibling nodes, and compacts
+    /// the slab to reclaim freed slots. Returns the number of bytes freed.
     pub fn compact_if_sparse(&mut self) -> CompactIfSparseResult {
-        // Early return if no empty leaves, or fewer than half are empty.
+        #[cfg(all(feature = "unittest", not(miri)))]
+        let (stats_before, revision_id_before, compaction_before) =
+            (self.stats, self.revision_id, self.compaction_stats);
+
+        // Early return if no empty leaves, or below threshold.
         if !self.is_sparse() {
             return CompactIfSparseResult::default();
         }
 
-        let rv = self._trim_empty_leaves();
+        let trim_result = self._trim_empty_leaves();
+        let merge_result = self._merge_underutilized_siblings();
         let slab_freed = self.compact_slab();
+        let inverted_index_size_delta = trim_result.size_delta + merge_result.size_delta;
+        let bytes_reclaimed = (-inverted_index_size_delta).max(0) as usize + slab_freed;
+
+        self.compaction_stats.runs = self
+            .compaction_stats
+            .runs
+            .checked_add(1)
+            .expect("Overflow!");
+        self.compaction_stats.bytes_reclaimed = self
+            .compaction_stats
+            .bytes_reclaimed
+            .checked_add(bytes_reclaimed)
+            .expect("Overflow!");
+        self.compaction_stats.nodes_merged = self
+            .compaction_stats
+            .nodes_merged
+            .checked_add(merge_result.nodes_merged)
+            .expect("Overflow!");
+        self.compaction_stats.leaves_trimmed = self
+            .compaction_stats
+            .leaves_trimmed
+            .checked_add((-trim_result.num_leaves_delta).max(0) as usize)
+            .expect("Overflow!");
+
+        #[cfg(all(feature = "unittest", not(miri)))]
+        {
+            self.check_tree_invariants();
+
+            assert_eq!(
+                stats_before.num_entries, self.stats.num_entries,
+                "num_entries should be unchanged after compaction: before={}, after={}",
+                stats_before.num_entries, self.stats.num_entries,
+            );
+            assert_eq!(
+                self.compaction_stats.runs,
+                compaction_before.runs + 1,
+                "compaction runs should increment exactly once",
+            );
+            assert_eq!(
+                self.compaction_stats.bytes_reclaimed,
+                compaction_before.bytes_reclaimed + bytes_reclaimed,
+                "bytes_reclaimed mismatch: before={}, delta={}, after={}",
+                compaction_before.bytes_reclaimed,
+                bytes_reclaimed,
+                self.compaction_stats.bytes_reclaimed,
+            );
+            assert_eq!(
+                self.compaction_stats.nodes_merged,
+                compaction_before.nodes_merged + merge_result.nodes_merged,
+                "nodes_merged mismatch: before={}, delta={}, after={}",
+                compaction_before.nodes_merged,
+                merge_result.nodes_merged,
+                self.compaction_stats.nodes_merged,
+            );
+            assert_eq!(
+                self.compaction_stats.leaves_trimmed,
+                compaction_before.leaves_trimmed + (-trim_result.num_leaves_delta).max(0) as usize,
+                "leaves_trimmed mismatch: before={}, delta={}, after={}",
+                compaction_before.leaves_trimmed,
+                (-trim_result.num_leaves_delta).max(0),
+                self.compaction_stats.leaves_trimmed,
+            );
+            assert!(
+                self.revision_id >= revision_id_before,
+                "revision_id must not go backwards during compaction: before={revision_id_before}, after={}",
+                self.revision_id,
+            );
+        }
+
         CompactIfSparseResult {
-            inverted_index_size_delta: rv.size_delta,
+            inverted_index_size_delta,
             node_size_delta: -(slab_freed as i64),
         }
     }
@@ -230,6 +334,7 @@ impl NumericRangeTree {
         });
 
         if !remap.is_empty() {
+            self.revision_id = self.revision_id.wrapping_add(1);
             // At this point, parent->children edges may be invalid.
             // We need to update them to reflect the new indices.
             if let Some(&new_idx) = remap.get(&self.root) {
@@ -396,5 +501,113 @@ impl NumericRangeTree {
         }
 
         nodes.remove(node_idx);
+    }
+
+    /// Merge underutilized sibling leaf nodes to reduce memory overhead.
+    ///
+    /// Traverses the tree looking for internal nodes whose children are both leaves
+    /// with low utilization (combined entries < MINIMUM_RANGE_CARDINALITY). When found,
+    /// merges the siblings into a single leaf node.
+    ///
+    /// This is particularly effective for sparse numeric distributions where splits
+    /// created many small leaf nodes.
+    fn _merge_underutilized_siblings(&mut self) -> MergeSiblingsResult {
+        let mut rv = MergeSiblingsResult::default();
+        Self::merge_siblings_recursive(&mut self.nodes, self.root, &mut rv, self.compress_floats);
+
+        if rv.changed {
+            self.revision_id = self.revision_id.wrapping_add(1);
+            self.stats.num_ranges = self.stats.num_ranges.apply_delta(rv.num_ranges_delta);
+            self.stats.num_leaves = self.stats.num_leaves.apply_delta(rv.num_leaves_delta);
+            self.stats.inverted_indexes_size =
+                self.stats.inverted_indexes_size.apply_delta(rv.size_delta);
+        }
+
+        rv
+    }
+
+    /// Recursively merge underutilized sibling leaves.
+    ///
+    /// Returns true if this node was merged into a leaf.
+    fn merge_siblings_recursive(
+        nodes: &mut NodeArena,
+        node_idx: NodeIndex,
+        rv: &mut MergeSiblingsResult,
+        compress_floats: bool,
+    ) -> bool {
+        let Some((left_idx, right_idx)) = nodes[node_idx].child_indices() else {
+            // Leaf node - nothing to merge
+            return false;
+        };
+
+        // Recursively process children first
+        let _left_merged = Self::merge_siblings_recursive(nodes, left_idx, rv, compress_floats);
+        let _right_merged = Self::merge_siblings_recursive(nodes, right_idx, rv, compress_floats);
+
+        // After recursion, check if both children are now leaves
+        let left_is_leaf = nodes[left_idx].is_leaf();
+        let right_is_leaf = nodes[right_idx].is_leaf();
+
+        if !left_is_leaf || !right_is_leaf {
+            return false;
+        }
+
+        // Both children are leaves - check if they should be merged
+        let left_range = nodes[left_idx].range().expect("leaf must have range");
+        let right_range = nodes[right_idx].range().expect("leaf must have range");
+
+        let combined_cardinality = left_range.cardinality() + right_range.cardinality();
+
+        // Merge if combined size is small enough
+        // Use MINIMUM_RANGE_CARDINALITY as threshold for merging
+        if combined_cardinality >= Self::MINIMUM_RANGE_CARDINALITY {
+            return false;
+        }
+
+        // Perform the merge
+        rv.changed = true;
+
+        // Account for memory freed from children
+        rv.size_delta -= left_range.memory_usage() as i64;
+        rv.size_delta -= right_range.memory_usage() as i64;
+        rv.num_ranges_delta -= 2;
+        rv.num_leaves_delta -= 1; // Two leaves become one
+        rv.nodes_merged += 2;
+
+        // Create new merged leaf
+        let mut merged_range = crate::NumericRange::new(compress_floats);
+        rv.size_delta += merged_range.memory_usage() as i64;
+
+        // Copy entries from left child
+        let mut reader = left_range.reader();
+        let mut result = inverted_index::RSIndexResult::build_numeric(0.0).build();
+        while reader.next_record(&mut result).unwrap_or(false) {
+            // SAFETY: We know the result contains numeric data
+            let value = unsafe { result.as_numeric_unchecked() };
+            let size = merged_range.add(result.doc_id, value);
+            rv.size_delta += size as i64;
+        }
+
+        // Copy entries from right child
+        let mut reader = right_range.reader();
+        while reader.next_record(&mut result).unwrap_or(false) {
+            // SAFETY: We know the result contains numeric data
+            let value = unsafe { result.as_numeric_unchecked() };
+            let size = merged_range.add(result.doc_id, value);
+            rv.size_delta += size as i64;
+        }
+        drop(result);
+
+        // Remove children from arena
+        nodes.remove(left_idx);
+        nodes.remove(right_idx);
+
+        // Replace current node with merged leaf
+        nodes[node_idx] = NumericRangeNode::Leaf(crate::LeafNode {
+            range: merged_range,
+        });
+        rv.num_ranges_delta += 1;
+
+        true
     }
 }

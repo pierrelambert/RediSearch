@@ -97,6 +97,7 @@ configPair_t __configPairs[] = {
   {"_MAX_TRIM_DELAY_MS",               "search-_max-trim-delay-ms"},
   {"_TRIMMING_STATE_CHECK_DELAY_MS",   "search-_trimming-state-check-delay-ms"},
   {"_SIMULATE_IN_FLEX",                "search-_simulate-in-flex"},
+  {"NUMERIC_TREE_COMPACTION",          "search-numeric-tree-compaction"},
 };
 
 static const char* FTConfigNameToConfigName(const char *name) {
@@ -1265,6 +1266,10 @@ CONFIG_GETTER(getTrimmingStateCheckDelay) {
 CONFIG_BOOLEAN_SETTER(setDebugSimulateInFlex, simulateInFlex)
 CONFIG_BOOLEAN_GETTER(getDebugSimulateInFlex, simulateInFlex, 0)
 
+// NUMERIC_TREE_COMPACTION
+CONFIG_BOOLEAN_SETTER(setNumericTreeCompaction, numericTreeCompaction)
+CONFIG_BOOLEAN_GETTER(getNumericTreeCompaction, numericTreeCompaction, 0)
+
 // ON_OOM
 CONFIG_SETTER(setOnOom) {
   size_t len;
@@ -1652,6 +1657,10 @@ RSConfigOptions RSGlobalConfigOptions = {
          .setValue = setDebugSimulateInFlex,
          .getValue = getDebugSimulateInFlex,
          .flags = RSCONFIGVAR_F_IMMUTABLE},
+        {.name = "NUMERIC_TREE_COMPACTION",
+         .helpText = "Enable/disable numeric tree compaction optimization (default: true)",
+         .setValue = setNumericTreeCompaction,
+         .getValue = getNumericTreeCompaction},
         {.name = NULL}}};
 
 void RSConfigOptions_AddConfigs(RSConfigOptions *src, RSConfigOptions *dst) {

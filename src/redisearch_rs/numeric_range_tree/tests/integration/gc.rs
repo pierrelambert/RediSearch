@@ -187,6 +187,8 @@ fn conditional_trim_below_threshold(#[values(false, true)] compress_floats: bool
     let free_stats = tree.compact_if_sparse();
     assert_eq!(free_stats.inverted_index_size_delta, 0);
     assert_eq!(free_stats.node_size_delta, 0);
+    assert_eq!(tree.compaction_runs(), 0);
+    assert_eq!(tree.bytes_reclaimed(), 0);
 }
 
 #[rstest]
@@ -210,6 +212,9 @@ fn conditional_trim_above_threshold(#[values(false, true)] compress_floats: bool
     assert!(free_stats.inverted_index_size_delta < 0);
     assert!(free_stats.node_size_delta < 0);
     assert!(tree.num_leaves() < leaves_before);
+    assert_eq!(tree.compaction_runs(), 1);
+    assert!(tree.bytes_reclaimed() > 0);
+    assert!(tree.leaves_trimmed() > 0);
 }
 
 // ============================================================================
@@ -760,4 +765,5 @@ fn compact_if_sparse_below_threshold_is_noop(#[values(false, true)] compress_flo
     let result = tree.compact_if_sparse();
     assert_eq!(result.inverted_index_size_delta, 0);
     assert_eq!(result.node_size_delta, 0);
+    assert_eq!(tree.compaction_runs(), 0);
 }

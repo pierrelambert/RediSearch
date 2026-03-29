@@ -204,7 +204,8 @@ static bool periodicCb(void *privdata, bool force) {
     }
 
     gc->execState = FGC_STATE_APPLYING;
-    gc->cleanNumericEmptyNodes = RSGlobalConfig.gcConfigParams.gcSettings.forkGCCleanNumericEmptyNodes;
+    gc->cleanNumericEmptyNodes = RSGlobalConfig.gcConfigParams.gcSettings.forkGCCleanNumericEmptyNodes &&
+                                 RSGlobalConfig.numericTreeCompaction;
     if (FGC_parentHandleFromChild(gc) == FGC_SPEC_DELETED) {
       gcrv = false;
     }
@@ -338,7 +339,8 @@ ForkGC *FGC_Create(StrongRef spec_ref, GCCallbacks *callbacks) {
   forkGc->retryInterval.tv_sec = RSGlobalConfig.gcConfigParams.gcSettings.forkGcRunIntervalSec;
   forkGc->retryInterval.tv_nsec = 0;
 
-  forkGc->cleanNumericEmptyNodes = RSGlobalConfig.gcConfigParams.gcSettings.forkGCCleanNumericEmptyNodes;
+  forkGc->cleanNumericEmptyNodes = RSGlobalConfig.gcConfigParams.gcSettings.forkGCCleanNumericEmptyNodes &&
+                                   RSGlobalConfig.numericTreeCompaction;
   forkGc->ctx = RedisModule_GetDetachedThreadSafeContext(RSDummyContext);
 
   callbacks->onTerm = onTerminateCb;
