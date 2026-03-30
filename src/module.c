@@ -1770,8 +1770,8 @@ int RediSearch_InitModuleInternal(RedisModuleCtx *ctx) {
     DEFINE_COMMAND(RS_DEBUG,         NULL,                     RS_READ_ONLY_FLAGS_DEFAULT, RegisterAllDebugCommands,  SUBSCRIBE_SUBCOMMANDS, "admin slow dangerous",                true,             indexOnlyCmdArgs, false),
     DEFINE_COMMAND(RS_SPELL_CHECK,   DiskDisabledCmd(SpellCheckCommand),        "readonly"                , SetFtSpellcheckInfo,       SET_COMMAND_INFO,      "",                     true,             indexOnlyCmdArgs, true),
     DEFINE_COMMAND(RS_CONFIG,        NULL,                     RS_READ_ONLY_FLAGS_DEFAULT, RegisterConfigSubCommands, SUBSCRIBE_SUBCOMMANDS, "admin",                true,             indexOnlyCmdArgs, false),
-    // SQL command - translates SQL to RQL and dispatches to FT.SEARCH/FT.AGGREGATE
-    DEFINE_COMMAND(RS_SQL_CMD,       SQLCommand,               "readonly"                , NULL,                      NONE,                  "read",                 true,             indexOnlyCmdArgs, false),
+    // SQL command - translates SQL to RQL and dispatches to FT.SEARCH/FT.AGGREGATE/FT.HYBRID
+    DEFINE_COMMAND(RS_SQL_CMD,       SQLCommand,               "readonly"                , NULL,                      NONE,                  "read",                 true,             noKeyArgs, false),
   };
 
   if (CreateSearchCommands(ctx, commands, sizeof(commands) / sizeof(commands[0])) != REDISMODULE_OK) {
@@ -4657,6 +4657,7 @@ RedisModule_OnLoad(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
     DEFINE_COMMAND("FT.PROFILE",    SafeCmd(ProfileCommandHandler),    "readonly", SetFtProfileInfo,            SET_COMMAND_INFO,      "read", true, noKeyArgs, false),
     DEFINE_COMMAND("FT.SPELLCHECK", SafeCmd(DiskDisabledCmd(SpellCheckCommandHandler)), "readonly", SetFtSpellcheckInfo,         SET_COMMAND_INFO,      "",     true, noKeyArgs, false),
     DEFINE_COMMAND("FT.HYBRID",     SafeCmd(DiskDisabledCmd(DistHybridCommand)), "readonly", SetFtHybridInfo,             SET_COMMAND_INFO,      "read", true, noKeyArgs, false),
+    DEFINE_COMMAND("FT.SQL",        SafeCmd(SQLCommand),               "readonly", NULL,                        NONE,                  "read", true, noKeyArgs, false),
     DEFINE_COMMAND("FT.CURSOR",     NULL,                              "readonly", RegisterCoordCursorCommands, SUBSCRIBE_SUBCOMMANDS, "read", true, noKeyArgs, false),
   };
   if (CreateSearchCommands(ctx, readCommands, sizeof(readCommands) / sizeof(SearchCommand)) != REDISMODULE_OK) {

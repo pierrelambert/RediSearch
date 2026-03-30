@@ -89,16 +89,17 @@
 //! ```sql
 //! -- Weighted hybrid search (70% vector, 30% text)
 //! SELECT * FROM products
-//! WHERE name MATCH 'laptop'
+//! WHERE category = 'electronics'
 //! ORDER BY embedding <-> '[0.1, 0.2]' LIMIT 10
 //! OPTION (vector_weight = 0.7, text_weight = 0.3)
 //! ```
 //!
 //! This translates to:
 //! ```text
-//! FT.HYBRID products "@name:laptop"
-//!   VECTOR embedding K 10 VECTOR_BLOB <blob>
-//!   WEIGHT 0.7 TEXT 0.3
+//! FT.HYBRID products SEARCH "@category:{electronics}"
+//!   VSIM @embedding $BLOB KNN 2 K 10
+//!   COMBINE LINEAR 4 ALPHA 0.7 BETA 0.3
+//!   LIMIT 0 10 PARAMS 2 BLOB <blob>
 //! ```
 //!
 //! **OPTION clause parameters:**
@@ -773,8 +774,36 @@ mod tests {
 
         let result = translator::translate(query).unwrap();
         assert_eq!(result.command, Command::Hybrid);
-        assert!(result.arguments.contains(&"VECTOR".to_string()));
-        assert!(result.arguments.contains(&"WEIGHT".to_string()));
+        assert_eq!(result.query_string, "*");
+        assert_eq!(
+            result.arguments,
+            vec![
+                "VSIM",
+                "@embedding",
+                "$BLOB",
+                "KNN",
+                "2",
+                "K",
+                "10",
+                "COMBINE",
+                "LINEAR",
+                "4",
+                "ALPHA",
+                "0.7",
+                "BETA",
+                "0.3",
+                "LIMIT",
+                "0",
+                "10",
+                "PARAMS",
+                "2",
+                "BLOB",
+                "[0.1, 0.2, 0.3]",
+            ]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>()
+        );
     }
 
     // End-to-end SQL parsing tests with <-> operator (pgvector syntax)
@@ -898,17 +927,35 @@ mod tests {
         assert_eq!(result.index_name, "products");
         // For FT.HYBRID, query_string is just the text query (no KNN syntax)
         assert_eq!(result.query_string, "*");
-
-        // Arguments should include VECTOR, K, VECTOR_BLOB, WEIGHT, TEXT
-        assert!(result.arguments.contains(&"VECTOR".to_string()));
-        assert!(result.arguments.contains(&"embedding".to_string()));
-        assert!(result.arguments.contains(&"K".to_string()));
-        assert!(result.arguments.contains(&"10".to_string()));
-        assert!(result.arguments.contains(&"VECTOR_BLOB".to_string()));
-        assert!(result.arguments.contains(&"WEIGHT".to_string()));
-        assert!(result.arguments.contains(&"0.7".to_string()));
-        assert!(result.arguments.contains(&"TEXT".to_string()));
-        assert!(result.arguments.contains(&"0.3".to_string()));
+        assert_eq!(
+            result.arguments,
+            vec![
+                "VSIM",
+                "@embedding",
+                "$BLOB",
+                "KNN",
+                "2",
+                "K",
+                "10",
+                "COMBINE",
+                "LINEAR",
+                "4",
+                "ALPHA",
+                "0.7",
+                "BETA",
+                "0.3",
+                "LIMIT",
+                "0",
+                "10",
+                "PARAMS",
+                "2",
+                "BLOB",
+                "[0.1, 0.2, 0.3]",
+            ]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>()
+        );
     }
 
     #[test]
@@ -925,12 +972,35 @@ mod tests {
         assert_eq!(result.command, Command::Hybrid);
         // Query string includes the filter
         assert_eq!(result.query_string, "@category:{electronics}");
-
-        // Verify weights
-        assert!(result.arguments.contains(&"WEIGHT".to_string()));
-        assert!(result.arguments.contains(&"0.6".to_string()));
-        assert!(result.arguments.contains(&"TEXT".to_string()));
-        assert!(result.arguments.contains(&"0.4".to_string()));
+        assert_eq!(
+            result.arguments,
+            vec![
+                "VSIM",
+                "@embedding",
+                "$BLOB",
+                "KNN",
+                "2",
+                "K",
+                "5",
+                "COMBINE",
+                "LINEAR",
+                "4",
+                "ALPHA",
+                "0.6",
+                "BETA",
+                "0.4",
+                "LIMIT",
+                "0",
+                "5",
+                "PARAMS",
+                "2",
+                "BLOB",
+                "[0.1, 0.2]",
+            ]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>()
+        );
     }
 
     #[test]
@@ -944,10 +1014,35 @@ mod tests {
         .unwrap();
 
         assert_eq!(result.command, Command::Hybrid);
-        // LIMIT should be in arguments
-        assert!(result.arguments.contains(&"LIMIT".to_string()));
-        assert!(result.arguments.contains(&"10".to_string())); // offset
-        assert!(result.arguments.contains(&"20".to_string())); // count
+        assert_eq!(
+            result.arguments,
+            vec![
+                "VSIM",
+                "@embedding",
+                "$BLOB",
+                "KNN",
+                "2",
+                "K",
+                "20",
+                "COMBINE",
+                "LINEAR",
+                "4",
+                "ALPHA",
+                "0.5",
+                "BETA",
+                "0.5",
+                "LIMIT",
+                "10",
+                "20",
+                "PARAMS",
+                "2",
+                "BLOB",
+                "[0.1]",
+            ]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>()
+        );
     }
 
     // NOT operator integration tests

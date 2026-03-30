@@ -171,6 +171,7 @@ Testing:
     SA=1|0                Alias for REDIS_STANDALONE
     TEST=name             Run specified test
     QUICK=1               Run quick test subset
+  make verify-sql    Run SQL parser tests and SQL behavioral tests
 
 Development:
   make run           Run Redis with RediSearch
@@ -247,6 +248,12 @@ rust-tests: $(BUILD_SCRIPT)
 pytest: $(BUILD_SCRIPT)
 	@echo "Running Python tests..."
 	@$(BUILD_SCRIPT) $(BUILD_ARGS) RUN_PYTEST
+
+verify-sql: $(BUILD_SCRIPT) verify-deps
+	@echo "Running SQL Rust tests..."
+	@cd $(ROOT)/src/redisearch_rs && if cargo nextest --version >/dev/null 2>&1; then cargo nextest run -p sql_parser -p sql_parser_ffi; else cargo test --profile optimised_test -p sql_parser -p sql_parser_ffi; fi
+	@echo "Running SQL behavioral tests..."
+	@$(BUILD_SCRIPT) $(BUILD_ARGS) RUN_PYTEST TEST=test_sql_layer.py
 
 parsers:
 ifeq ($(FORCE),1)

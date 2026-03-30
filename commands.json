@@ -1921,6 +1921,18 @@
     "since": "1.1.0",
     "group": "search"
   },
+  "FT.SQL": {
+    "summary": "Translates a SQL query to `FT.SEARCH`, `FT.AGGREGATE`, or `FT.HYBRID` and executes it",
+    "complexity": "Depends on the translated backend command plus SQL parse, validation, and translation overhead",
+    "arguments": [
+      {
+        "name": "query",
+        "type": "string",
+        "summary": "Specifies the SQL query string. The index name is taken from the SQL `FROM` clause."
+      }
+    ],
+    "group": "search"
+  },
   "FT.PROFILE": {
     "summary": "Performs a `FT.SEARCH`, `FT.AGGREGATE`, or `FT.HYBRID` command and collects performance information",
     "complexity": "O(N)",

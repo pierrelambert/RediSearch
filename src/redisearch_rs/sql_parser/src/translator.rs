@@ -327,26 +327,38 @@ fn build_arguments(query: &SelectQuery, command: Command) -> Result<Vec<String>,
         Command::Hybrid => {
             // FT.HYBRID specific arguments
             if let Some(ref hs) = query.hybrid_search {
-                // Vector configuration
-                args.push("VECTOR".to_string());
-                args.push(hs.vector.field.clone());
+                // FT.HYBRID uses SEARCH <query> VSIM @field $BLOB KNN 2 K <k>
+                args.push("VSIM".to_string());
+                args.push(format!("@{}", hs.vector.field));
+                args.push("$BLOB".to_string());
+                args.push("KNN".to_string());
+                args.push("2".to_string());
                 args.push("K".to_string());
                 args.push(hs.vector.k.to_string());
-                args.push("VECTOR_BLOB".to_string());
-                args.push(hs.vector.vector.clone());
 
-                // Weights
-                args.push("WEIGHT".to_string());
+                // SQL v1 only exposes weighted linear fusion.
+                args.push("COMBINE".to_string());
+                args.push("LINEAR".to_string());
+                args.push("4".to_string());
+                args.push("ALPHA".to_string());
                 args.push(hs.vector_weight.to_string());
-                args.push("TEXT".to_string());
+                args.push("BETA".to_string());
                 args.push(hs.text_weight.to_string());
-            }
 
-            // LIMIT clause
-            if let Some(limit) = &query.limit {
+                let (offset, count) = if let Some(limit) = &query.limit {
+                    (limit.offset, limit.count)
+                } else {
+                    (0_u64, hs.vector.k as u64)
+                };
+
                 args.push("LIMIT".to_string());
-                args.push(limit.offset.to_string());
-                args.push(limit.count.to_string());
+                args.push(offset.to_string());
+                args.push(count.to_string());
+
+                args.push("PARAMS".to_string());
+                args.push("2".to_string());
+                args.push("BLOB".to_string());
+                args.push(hs.vector.vector.clone());
             }
         }
         Command::Aggregate => {

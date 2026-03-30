@@ -608,4 +608,65 @@ mod tests {
             sql_translation_result_free(result);
         }
     }
+
+    #[test]
+    fn test_ffi_hybrid_search() {
+        let sql = CString::new(
+            "SELECT * FROM products \
+             WHERE category = 'electronics' \
+             ORDER BY embedding <-> '[0.5]' LIMIT 3 \
+             OPTION (vector_weight = 0.8, text_weight = 0.2)",
+        )
+        .unwrap();
+        // SAFETY: sql is a valid null-terminated C string
+        let result = unsafe { sql_translate(sql.as_ptr()) };
+        assert!(result.success);
+        assert_eq!(result.command, SqlCommand::Hybrid);
+
+        // SAFETY: result was returned by sql_translate
+        unsafe {
+            let query_string = CStr::from_ptr(result.query_string).to_str().unwrap();
+            assert_eq!(query_string, "@category:{electronics}");
+
+            let args: Vec<String> = (0..result.arguments_len)
+                .map(|i| {
+                    CStr::from_ptr(*result.arguments.add(i))
+                        .to_str()
+                        .unwrap()
+                        .to_string()
+                })
+                .collect();
+            assert_eq!(
+                args,
+                vec![
+                    "VSIM",
+                    "@embedding",
+                    "$BLOB",
+                    "KNN",
+                    "2",
+                    "K",
+                    "3",
+                    "COMBINE",
+                    "LINEAR",
+                    "4",
+                    "ALPHA",
+                    "0.8",
+                    "BETA",
+                    "0.2",
+                    "LIMIT",
+                    "0",
+                    "3",
+                    "PARAMS",
+                    "2",
+                    "BLOB",
+                    "[0.5]",
+                ]
+                .into_iter()
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+            );
+
+            sql_translation_result_free(result);
+        }
+    }
 }

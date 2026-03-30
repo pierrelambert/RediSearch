@@ -14,6 +14,8 @@ Tests FT.SQL command functionality, verifying SQL to RQL translation
 and result equivalence with FT.SEARCH/FT.AGGREGATE.
 """
 
+import json
+
 from common import *
 
 
@@ -26,6 +28,56 @@ def _get_sql_connection(env):
     return getConnectionByEnv(env)
 
 
+def _get_total_results(response):
+    if isinstance(response, dict):
+        return response.get('total_results', 0)
+    return response[0] if response else 0
+
+
+def _get_results(response):
+    if isinstance(response, dict):
+        return response.get('results', [])
+    return response[1:]
+
+
+def _search_rows(response):
+    if isinstance(response, dict):
+        return [
+            (result.get('id'), result.get('extra_attributes', {}))
+            for result in _get_results(response)
+        ]
+
+    rows = []
+    for i in range(1, len(response), 2):
+        attributes = to_dict(response[i + 1]) if i + 1 < len(response) else {}
+        rows.append((response[i], attributes))
+    return rows
+
+
+def _aggregate_rows(response):
+    if isinstance(response, dict):
+        return [row.get('extra_attributes', row) for row in _get_results(response)]
+    return [to_dict(row) for row in _get_results(response)]
+
+
+def _assert_search_parity(env, sql_result, native_result):
+    env.assertEqual(_get_total_results(sql_result), _get_total_results(native_result))
+    env.assertEqual(_search_rows(sql_result), _search_rows(native_result))
+
+
+def _assert_aggregate_parity(env, sql_result, native_result):
+    env.assertEqual(_get_total_results(sql_result), _get_total_results(native_result))
+    env.assertEqual(_aggregate_rows(sql_result), _aggregate_rows(native_result))
+
+
+def _assert_hybrid_parity(env, sql_response, hybrid_response):
+    sql_results, sql_count = get_results_from_hybrid_response(sql_response)
+    hybrid_results, hybrid_count = get_results_from_hybrid_response(hybrid_response)
+
+    env.assertEqual(sql_count, hybrid_count)
+    env.assertEqual(list(sql_results.keys()), list(hybrid_results.keys()))
+
+
 def test_sql_disabled_by_default():
     env = Env(noDefaultModuleArgs=True)
     if env.env == 'existing-env':
@@ -34,6 +86,16 @@ def test_sql_disabled_by_default():
     env.expect(config_cmd(), 'GET', 'SQL_ENABLED').equal([['SQL_ENABLED', 'false']])
     env.expect('FT.SQL', 'SELECT * FROM idx').error().contains('FT.SQL is disabled')
     env.stop()
+
+
+def test_sql_runtime_disable_blocks_queries(env):
+    _enable_sql(env)
+
+    env.cmd('FT.CREATE', 'idx', 'SCHEMA', 'name', 'TEXT')
+    env.cmd('FT.SQL', "SELECT * FROM idx")
+
+    env.expect(config_cmd(), 'SET', 'SQL_ENABLED', 'false').ok()
+    env.expect('FT.SQL', "SELECT * FROM idx").error().contains('FT.SQL is disabled')
 
 
 # =============================================================================
@@ -318,6 +380,78 @@ def test_sql_different_queries_cached_separately(env):
 
 
 # =============================================================================
+# Aggregate Tests
+# =============================================================================
+
+def test_sql_group_by_having_parity(env):
+    """FT.SQL GROUP BY/HAVING should match FT.AGGREGATE."""
+    conn = _get_sql_connection(env)
+
+    env.cmd('FT.CREATE', 'idx', 'SCHEMA', 'category', 'TAG', 'price', 'NUMERIC')
+
+    docs = [
+        ('doc1', 'electronics', '100'),
+        ('doc2', 'electronics', '300'),
+        ('doc3', 'furniture', '200'),
+        ('doc4', 'furniture', '400'),
+        ('doc5', 'clearance', '900'),
+    ]
+    for doc_id, category, price in docs:
+        conn.execute_command('HSET', doc_id, 'category', category, 'price', price)
+    waitForIndex(env, 'idx')
+
+    sql_result = env.cmd(
+        'FT.SQL',
+        "SELECT category, COUNT(*) AS cnt, AVG(price) AS avg_price "
+        "FROM idx GROUP BY category HAVING COUNT(*) >= 2 ORDER BY category ASC"
+    )
+    native_result = env.cmd(
+        'FT.AGGREGATE', 'idx', '*',
+        'GROUPBY', '1', '@category',
+        'REDUCE', 'COUNT', '0', 'AS', 'cnt',
+        'REDUCE', 'AVG', '1', '@price', 'AS', 'avg_price',
+        'FILTER', '@cnt>=2',
+        'SORTBY', '2', '@category', 'ASC'
+    )
+
+    _assert_aggregate_parity(env, sql_result, native_result)
+
+
+def test_sql_group_by_multi_order_by_parity(env):
+    """Aggregate multi-column ORDER BY should route through FT.AGGREGATE correctly."""
+    conn = _get_sql_connection(env)
+
+    env.cmd('FT.CREATE', 'idx', 'SCHEMA', 'category', 'TAG')
+
+    for doc_id, category in (
+        ('doc1', 'alpha'),
+        ('doc2', 'alpha'),
+        ('doc3', 'beta'),
+        ('doc4', 'beta'),
+        ('doc5', 'beta'),
+        ('doc6', 'gamma'),
+        ('doc7', 'gamma'),
+        ('doc8', 'gamma'),
+    ):
+        conn.execute_command('HSET', doc_id, 'category', category)
+    waitForIndex(env, 'idx')
+
+    sql_result = env.cmd(
+        'FT.SQL',
+        "SELECT category, COUNT(*) AS cnt "
+        "FROM idx GROUP BY category ORDER BY cnt DESC, category ASC"
+    )
+    native_result = env.cmd(
+        'FT.AGGREGATE', 'idx', '*',
+        'GROUPBY', '1', '@category',
+        'REDUCE', 'COUNT', '0', 'AS', 'cnt',
+        'SORTBY', '4', '@cnt', 'DESC', '@category', 'ASC'
+    )
+
+    _assert_aggregate_parity(env, sql_result, native_result)
+
+
+# =============================================================================
 # Complex Query Tests
 # =============================================================================
 
@@ -357,6 +491,117 @@ def test_sql_select_fields_with_where(env):
     rql_result = env.cmd('FT.SEARCH', 'idx', '@price:[(50 +inf]', 'RETURN', '2', 'name', 'stock')
 
     env.assertEqual(sql_result[0], rql_result[0])
+
+
+def test_sql_hybrid_query(env):
+    """FT.SQL Hybrid queries should match the live FT.HYBRID grammar."""
+    conn = _get_sql_connection(env)
+
+    env.cmd(
+        'FT.CREATE', 'idx', 'SCHEMA',
+        'category', 'TAG',
+        'embedding', 'VECTOR', 'FLAT', 6, 'TYPE', 'FLOAT32', 'DIM', 2, 'DISTANCE_METRIC', 'L2'
+    )
+    conn.execute_command('HSET', 'doc1', 'category', 'electronics',
+                         'embedding', np.array([0.0, 0.0]).astype(np.float32).tobytes())
+    conn.execute_command('HSET', 'doc2', 'category', 'electronics',
+                         'embedding', np.array([1.0, 0.0]).astype(np.float32).tobytes())
+    conn.execute_command('HSET', 'doc3', 'category', 'accessories',
+                         'embedding', np.array([0.0, 1.0]).astype(np.float32).tobytes())
+    waitForIndex(env, 'idx')
+
+    sql_response = env.cmd(
+        'FT.SQL',
+        "SELECT * FROM idx WHERE category = 'electronics' "
+        "ORDER BY embedding <-> '[0.0, 0.0]' LIMIT 2 "
+        "OPTION (vector_weight = 0.7, text_weight = 0.3)"
+    )
+
+    hybrid_response = env.cmd(
+        'FT.HYBRID', 'idx',
+        'SEARCH', '@category:{electronics}',
+        'VSIM', '@embedding', '$BLOB',
+        'KNN', '2', 'K', '2',
+        'COMBINE', 'LINEAR', '4', 'ALPHA', '0.7', 'BETA', '0.3',
+        'LIMIT', '0', '2',
+        'PARAMS', '2', 'BLOB', np.array([0.0, 0.0]).astype(np.float32).tobytes()
+    )
+
+    _assert_hybrid_parity(env, sql_response, hybrid_response)
+
+
+def test_sql_vector_knn_query(env):
+    """FT.SQL vector KNN should match FT.SEARCH KNN execution."""
+    conn = _get_sql_connection(env)
+
+    env.cmd(
+        'FT.CREATE', 'idx', 'SCHEMA',
+        'category', 'TAG',
+        'embedding', 'VECTOR', 'FLAT', 6, 'TYPE', 'FLOAT32', 'DIM', 2, 'DISTANCE_METRIC', 'L2'
+    )
+
+    docs = [
+        ('doc1', 'electronics', np.array([0.0, 0.0]).astype(np.float32).tobytes()),
+        ('doc2', 'electronics', np.array([1.0, 0.0]).astype(np.float32).tobytes()),
+        ('doc3', 'electronics', np.array([0.0, 2.0]).astype(np.float32).tobytes()),
+        ('doc4', 'accessories', np.array([0.0, 0.0]).astype(np.float32).tobytes()),
+    ]
+    for doc_id, category, vector in docs:
+        conn.execute_command('HSET', doc_id, 'category', category, 'embedding', vector)
+    waitForIndex(env, 'idx')
+
+    query_vector = np.array([0.1, 0.0]).astype(np.float32)
+    sql_result = env.cmd(
+        'FT.SQL',
+        "SELECT category FROM idx WHERE category = 'electronics' "
+        "ORDER BY embedding <-> '[0.1, 0.0]' LIMIT 2"
+    )
+    native_result = env.cmd(
+        'FT.SEARCH', 'idx',
+        '@category:{electronics}=>[KNN 2 @embedding $BLOB]',
+        'PARAMS', '2', 'BLOB', query_vector.tobytes(),
+        'RETURN', '1', 'category',
+        'DIALECT', '2'
+    )
+
+    _assert_search_parity(env, sql_result, native_result)
+
+
+def test_sql_hybrid_query_default_text_weight(env):
+    """FT.SQL Hybrid should default text_weight to 0.5 when only vector_weight is set."""
+    conn = _get_sql_connection(env)
+
+    env.cmd(
+        'FT.CREATE', 'idx', 'SCHEMA',
+        'category', 'TAG',
+        'embedding', 'VECTOR', 'FLAT', 6, 'TYPE', 'FLOAT32', 'DIM', 2, 'DISTANCE_METRIC', 'L2'
+    )
+    conn.execute_command('HSET', 'doc1', 'category', 'electronics',
+                         'embedding', np.array([0.0, 0.0]).astype(np.float32).tobytes())
+    conn.execute_command('HSET', 'doc2', 'category', 'electronics',
+                         'embedding', np.array([1.0, 0.0]).astype(np.float32).tobytes())
+    conn.execute_command('HSET', 'doc3', 'category', 'accessories',
+                         'embedding', np.array([0.0, 1.0]).astype(np.float32).tobytes())
+    waitForIndex(env, 'idx')
+
+    query_vector = np.array([0.0, 0.0]).astype(np.float32)
+    sql_response = env.cmd(
+        'FT.SQL',
+        "SELECT * FROM idx WHERE category = 'electronics' "
+        "ORDER BY embedding <-> '[0.0, 0.0]' LIMIT 2 "
+        "OPTION (vector_weight = 0.6)"
+    )
+    hybrid_response = env.cmd(
+        'FT.HYBRID', 'idx',
+        'SEARCH', '@category:{electronics}',
+        'VSIM', '@embedding', '$BLOB',
+        'KNN', '2', 'K', '2',
+        'COMBINE', 'LINEAR', '4', 'ALPHA', '0.6', 'BETA', '0.5',
+        'LIMIT', '0', '2',
+        'PARAMS', '2', 'BLOB', query_vector.tobytes()
+    )
+
+    _assert_hybrid_parity(env, sql_response, hybrid_response)
 
 
 def test_sql_case_insensitive_keywords(env):
@@ -411,3 +656,95 @@ def test_sql_text_equality_is_rejected(env):
     env.expect('FT.SQL', "SELECT * FROM idx WHERE title = 'redis'").error() \
         .contains('TEXT field').contains('MATCH')
 
+
+def test_sql_option_without_vector_is_rejected(env):
+    _enable_sql(env)
+    env.cmd('FT.CREATE', 'idx', 'SCHEMA', 'category', 'TAG')
+
+    env.expect(
+        'FT.SQL',
+        "SELECT * FROM idx WHERE category = 'electronics' OPTION (vector_weight = 0.7)"
+    ).error().contains('requires a vector search')
+
+
+def test_sql_multi_order_by_plain_search_is_rejected(env):
+    _enable_sql(env)
+    env.cmd('FT.CREATE', 'idx', 'SCHEMA', 'name', 'TEXT', 'SORTABLE', 'price', 'NUMERIC', 'SORTABLE')
+
+    env.expect(
+        'FT.SQL',
+        "SELECT * FROM idx ORDER BY price DESC, name ASC"
+    ).error().contains('Multiple ORDER BY columns are not supported by FT.SEARCH')
+
+
+@skip(no_json=True)
+def test_sql_json_index_search_parity(env):
+    """FT.SQL should work against JSON indexes with aliased fields."""
+    conn = _get_sql_connection(env)
+
+    env.cmd(
+        'FT.CREATE', 'idx', 'ON', 'JSON', 'PREFIX', '1', 'doc:',
+        'SCHEMA',
+        '$.name', 'AS', 'name', 'TEXT',
+        '$.price', 'AS', 'price', 'NUMERIC', 'SORTABLE',
+        '$.category', 'AS', 'category', 'TAG'
+    )
+
+    docs = {
+        'doc:1': {'name': 'Laptop', 'price': 1000, 'category': 'electronics'},
+        'doc:2': {'name': 'Phone', 'price': 500, 'category': 'electronics'},
+        'doc:3': {'name': 'Desk', 'price': 200, 'category': 'furniture'},
+    }
+    for doc_id, payload in docs.items():
+        conn.execute_command('JSON.SET', doc_id, '$', json.dumps(payload))
+    waitForIndex(env, 'idx')
+
+    sql_result = env.cmd(
+        'FT.SQL',
+        "SELECT name, price FROM idx WHERE category = 'electronics' ORDER BY price ASC LIMIT 2"
+    )
+    native_result = env.cmd(
+        'FT.SEARCH', 'idx', '@category:{electronics}',
+        'SORTBY', 'price', 'ASC',
+        'RETURN', '2', 'name', 'price',
+        'LIMIT', '0', '2'
+    )
+
+    _assert_search_parity(env, sql_result, native_result)
+
+
+@skip(cluster=False)
+def test_sql_cluster_search_parity(env):
+    """FT.SQL should be available on the coordinator/public command path."""
+    conn = _get_sql_connection(env)
+
+    env.cmd(
+        'FT.CREATE', 'idx', 'ON', 'HASH', 'PREFIX', '1', 'doc:',
+        'SCHEMA',
+        'name', 'TEXT', 'SORTABLE',
+        'category', 'TAG',
+        'price', 'NUMERIC', 'SORTABLE'
+    )
+
+    docs = [
+        ('doc:1', 'Laptop', 'electronics', '1000'),
+        ('doc:2', 'Phone', 'electronics', '500'),
+        ('doc:3', 'Tablet', 'electronics', '750'),
+        ('doc:4', 'Desk', 'furniture', '200'),
+    ]
+    for doc_id, name, category, price in docs:
+        conn.execute_command('HSET', doc_id, 'name', name, 'category', category, 'price', price)
+    waitForIndex(env, 'idx')
+
+    sql_result = env.cmd(
+        'FT.SQL',
+        "SELECT name, price FROM idx WHERE category = 'electronics' ORDER BY price ASC LIMIT 2"
+    )
+    native_result = env.cmd(
+        'FT.SEARCH', 'idx', '@category:{electronics}',
+        'SORTBY', 'price', 'ASC',
+        'RETURN', '2', 'name', 'price',
+        'LIMIT', '0', '2'
+    )
+
+    _assert_search_parity(env, sql_result, native_result)

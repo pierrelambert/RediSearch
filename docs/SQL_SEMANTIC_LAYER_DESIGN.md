@@ -4,9 +4,46 @@
 
 **Purpose**: Enable SQL-familiar developers to query RediSearch indexes using standard SQL syntax, lowering the barrier to entry and improving developer experience.
 
-**Approach**: Introduce an `FT.SQL` command with a Rust-based SQL parser that translates SQL queries into equivalent RQL (RediSearch Query Language) commands.
+**Approach**: Introduce an `FT.SQL` command with a Rust-based SQL parser that translates SQL queries into equivalent RediSearch command invocations.
 
 **Performance Target**: <1ms translation overhead for cached queries; near-zero overhead for cache hits.
+
+## Status And Source Of Truth
+
+- [FT.SQL command reference](commands/FT.SQL.md) is the authoritative
+  user-facing contract for syntax, supported surface, and limitations.
+- [SQL test guide](SQL_TEST_GUIDE.md) contains only verified examples that map
+  to module-level behavioral tests.
+- This design document records architecture, closure targets, and historical
+  design notes. If a behavior example here conflicts with the command reference
+  or passing tests, follow the command reference and tests.
+
+---
+
+## 0. Scope Freeze (Target GA Surface)
+
+This document mixes implemented behavior, closure targets, and future ideas. For
+the SQL semantic-layer closure work, the target GA subset is the matrix below.
+It overrides older aspirational examples elsewhere in this document.
+
+The branch is still experimental/beta today and remains gated by
+`SQL_ENABLED`. Freezing the scope does not imply the branch is currently GA; it
+defines the exact feature set that must be made correct, tested, and documented
+before the default-on decision.
+
+| Surface | Target GA | Backend | Notes |
+|---------|-----------|---------|-------|
+| `SELECT *`, field projection, aliases, `LIMIT/OFFSET` | Yes | `FT.SEARCH` | Core query surface |
+| Comparisons, `BETWEEN`, `IN` / `NOT IN`, `LIKE` / `NOT LIKE`, `IS NULL` / `IS NOT NULL`, `AND` / `OR` / `NOT` | Yes | `FT.SEARCH` | Schema-aware validation still applies |
+| Single-column `ORDER BY` on non-aggregate queries | Yes | `FT.SEARCH` | Matches current translator shape |
+| Multi-column `ORDER BY` | Aggregate-only | `FT.AGGREGATE` | Plain search queries must reject it |
+| `DISTINCT`, aggregate functions, `GROUP BY`, `HAVING` | Yes | `FT.AGGREGATE` | Includes the aggregate set already implemented in the Rust layer |
+| pgvector-style KNN (`<->`, `<=>`, `<#>`) | Yes | `FT.SEARCH` | `LIMIT` determines `K`; default `K=10` |
+| Weighted Hybrid via `OPTION(vector_weight, text_weight)` | Yes | `FT.HYBRID` | Must emit the live `SEARCH ... VSIM ... COMBINE LINEAR ... PARAMS` grammar |
+| Additional Hybrid knobs (`RANGE`, `RRF`, `YIELD_SCORE_AS`, filter policy tuning, scorer selection) | No | N/A | Post-GA for SQL v1 |
+| `JOIN`, subqueries, `UNION`, window functions | No | N/A | Post-GA |
+| Dedicated SQL full-text predicates (`MATCH`, `FTS(...)`, `CONTAINS`) | No | N/A | Post-GA |
+| Geo SQL, schema discovery SQL (`SHOW`, `DESCRIBE`) | No | N/A | Post-GA |
 
 ---
 
@@ -17,16 +54,16 @@
 │                              FT.SQL Command                                 │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │                                                                             │
-│   SQL Query ──► SQL Parser ──► SQL AST ──► Translator ──► RQL String       │
+│   SQL Query ──► SQL Parser ──► SQL AST ──► Translator ──► Command argv      │
 │       │           (Rust)        (Rust)       (Rust)            │            │
 │       │                                                        │            │
 │       └──────────────────── Cache Layer ◄──────────────────────┘            │
-│                              (sql_hash → rql_string)                        │
+│                           (sql_hash → translation)                          │
 │                                                                             │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │                                                                             │
-│   RQL String ──► Existing Query Pipeline ──► Results                       │
-│                    (FT.SEARCH/FT.AGGREGATE)                                 │
+│   Command argv ──► Existing Query Pipeline ──► Results                      │
+│               (FT.SEARCH / FT.AGGREGATE / FT.HYBRID)                        │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -36,7 +73,7 @@
 | Component | Language | Responsibility |
 |-----------|----------|----------------|
 | `sql_parser` | Rust | Parse SQL string into AST, validate syntax |
-| `sql_translator` | Rust | Convert SQL AST to RQL commands |
+| `sql_translator` | Rust | Convert SQL AST to RediSearch command invocations |
 | `sql_cache` | Rust | Cache SQL→RQL translations (hash-based) |
 | `sql_parser_ffi` | Rust | C FFI bindings for integration |
 | `sql_command.c` | C | Register `FT.SQL` command, orchestrate flow |
@@ -52,7 +89,7 @@
 
 ## 2. SQL Subset Support
 
-### Supported Features
+### Target GA Features
 
 **SELECT clause**
 - `SELECT *`
@@ -107,6 +144,9 @@
   → `FT.HYBRID`
 - Weighted scoring between vector and structured-filter results is configurable through `vector_weight` and `text_weight`
 - If only one weight is provided, the other defaults to `0.5`
+- The SQL v1 target is the live Hybrid grammar:
+  `FT.HYBRID <index> SEARCH <query> VSIM @field $BLOB KNN 2 K <k> COMBINE LINEAR ... PARAMS 2 BLOB <blob>`
+- SQL v1 does not expose Hybrid-only knobs beyond `vector_weight` and `text_weight`
 
 **Translation Cache**
 - Thread-safe LRU cache for SQL → RQL translations
@@ -121,6 +161,8 @@
 - Window functions
 - Dedicated full-text predicate syntax such as `MATCH`, `FTS(...)`, or `CONTAINS`
 - Geo queries
+- Multi-column `ORDER BY` for non-aggregate queries
+- SQL exposure of advanced `FT.HYBRID` clauses such as `RANGE`, `RRF`, `YIELD_SCORE_AS`, scorer selection, and vector-side `FILTER`
 
 ---
 
@@ -232,8 +274,8 @@
 
 | SQL | RQL Translation | Notes |
 |-----|-----------------|-------|
-| `SELECT * FROM idx ORDER BY embedding <-> '[0.1, 0.2]' LIMIT 10 OPTION (vector_weight = 0.7, text_weight = 0.3)` | `FT.HYBRID idx "*" VECTOR embedding K 10 VECTOR_BLOB [0.1, 0.2] WEIGHT 0.7 TEXT 0.3 LIMIT 0 10` | `OPTION` switches the command to `FT.HYBRID` |
-| `SELECT * FROM idx WHERE category = 'electronics' ORDER BY embedding <=> '[0.1, 0.2]' LIMIT 5 OPTION (vector_weight = 0.6, text_weight = 0.4)` | `FT.HYBRID idx "@category:{electronics}" VECTOR embedding K 5 VECTOR_BLOB [0.1, 0.2] WEIGHT 0.6 TEXT 0.4 LIMIT 0 5` | Structured filters are preserved in the hybrid query string |
+| `SELECT * FROM idx ORDER BY embedding <-> '[0.1, 0.2]' LIMIT 10 OPTION (vector_weight = 0.7, text_weight = 0.3)` | `FT.HYBRID idx SEARCH "*" VSIM @embedding $BLOB KNN 2 K 10 COMBINE LINEAR 4 ALPHA 0.7 BETA 0.3 PARAMS 2 BLOB [0.1, 0.2]` | `OPTION` switches the command to `FT.HYBRID` and must use the live parser grammar |
+| `SELECT * FROM idx WHERE category = 'electronics' ORDER BY embedding <=> '[0.1, 0.2]' LIMIT 5 OPTION (vector_weight = 0.6, text_weight = 0.4)` | `FT.HYBRID idx SEARCH "@category:{electronics}" VSIM @embedding $BLOB KNN 2 K 5 COMBINE LINEAR 4 ALPHA 0.6 BETA 0.4 PARAMS 2 BLOB [0.1, 0.2]` | Structured filters are preserved in the Hybrid search subquery |
 | `OPTION (vector_weight = 0.6)` | `vector_weight = 0.6`, `text_weight = 0.5` | Unspecified weight defaults to `0.5` |
 
 ---
@@ -267,44 +309,34 @@ src/redisearch_rs/
 
 | Crate | Version | Purpose |
 |-------|---------|---------|
-| `sqlparser` | 0.52+ | SQL dialect parsing (ANSI SQL compliant) |
+| `sqlparser` | `0.54.0` | SQL parsing and AST generation |
 
 **Why `sqlparser`?**
 - Battle-tested, used by DataFusion, Apache Arrow, etc.
-- Supports multiple SQL dialects (we'll use Generic/ANSI)
+- Supports multiple SQL dialects; the current parser uses `PostgreSqlDialect`
+  so pgvector operators like `<->`, `<=>`, and `<#>` are parsed correctly
 - Produces well-structured AST
 - Active maintenance, good documentation
 
 ### C Integration
 
-**New File**: `src/sql_command.c`
+**Current runtime flow** (`src/sql_command.c`)
 
-```c
-// Command registration
-int FT_SQLCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc);
-
-// FFI declarations (from sql_parser_ffi.h)
-typedef struct SqlTranslationResult {
-    char *rql_query;      // NULL on error
-    char *error_message;  // NULL on success
-    int is_aggregate;     // 1 if should use FT.AGGREGATE
-} SqlTranslationResult;
-
-SqlTranslationResult sql_translate(const char *sql, const char *index_name);
-void sql_translation_result_free(SqlTranslationResult result);
-```
-
-**Command Flow**:
-```c
-int FT_SQLCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
-    // 1. Parse arguments: FT.SQL <sql_query>
-    // 2. Call Rust: sql_translate(sql, NULL)
-    // 3. If error, return error message
-    // 4. If is_aggregate, dispatch to FT.AGGREGATE
-    // 5. Otherwise, dispatch to FT.SEARCH
-    // 6. Free result
-}
-```
+1. Parse `FT.SQL <sql_query>`.
+2. Probe the query once to discover the target index and collect schema
+   metadata for validation/cache invalidation.
+3. Call `sql_translate_cached_with_schema(...)` with the current schema
+   revision and field capabilities.
+4. Dispatch based on the translated command enum:
+   - `Search` → `FT.SEARCH`
+   - `Aggregate` → `FT.AGGREGATE`
+   - `Hybrid` → `FT.HYBRID`
+5. Append `DIALECT 2` only for `FT.SEARCH` / `FT.AGGREGATE`. Hybrid dispatch
+   must use the live `FT.HYBRID SEARCH ... VSIM ... COMBINE LINEAR ... PARAMS`
+   grammar and must not append `DIALECT`.
+6. Use the public command path in both standalone and coordinator deployments;
+   `FT.SQL` is registered with `noKeyArgs` because the index is embedded in the
+   SQL string.
 
 ### Key Interfaces
 
@@ -316,7 +348,7 @@ pub fn translate(sql: &str) -> Result<Translation, SqlError>;
 
 /// Translation result
 pub struct Translation {
-    pub command: Command,         // Search or Aggregate
+    pub command: Command,         // Search, Aggregate, or Hybrid
     pub index_name: String,
     pub query_string: String,
     pub arguments: Vec<String>,   // Additional RQL arguments
@@ -325,6 +357,7 @@ pub struct Translation {
 pub enum Command {
     Search,     // FT.SEARCH
     Aggregate,  // FT.AGGREGATE
+    Hybrid,     // FT.HYBRID
 }
 ```
 
@@ -431,8 +464,8 @@ struct CachedTranslation {
 The SQL layer's translation cache is **separate** from the query result cache (`query_cache`):
 
 ```
-SQL Query ──► [Translation Cache] ──► RQL String ──► [Query Cache] ──► Results
-              (SQL→RQL mapping)                      (RQL→DocIds mapping)
+SQL Query ──► [Translation Cache] ──► Translation ──► [Query Cache] ──► Results
+              (SQL→command mapping)                  (backend-query→DocIds mapping)
 ```
 
 Both caches work together:
@@ -454,6 +487,38 @@ Both caches work together:
 2. **Cache hit rate**: In realistic workloads
 3. **Memory overhead**: Per cached translation
 4. **Comparison**: `FT.SQL` vs equivalent `FT.SEARCH` latency
+
+### Benchmark Artifacts
+
+- Rust microbenchmarks:
+  `src/redisearch_rs/sql_parser/benches/sql_translation.rs`
+- End-to-end benchmark runbook:
+  `tests/benchmarks/SQL_BENCHMARKS.md`
+- Search SQL benchmark pair:
+  `tests/benchmarks/search-ftsb-10K-enwiki_abstract-hashes-fulltext-search-sortby-limit-0-100.yml`
+  and
+  `tests/benchmarks/search-ftsb-10K-enwiki_abstract-hashes-sql-search-sortby-limit-0-100.yml`
+- Aggregate SQL benchmark pair:
+  `tests/benchmarks/search-ftsb-10K-enwiki_abstract-hashes-groupby-title-limit-0-100.yml`
+  and
+  `tests/benchmarks/search-ftsb-10K-enwiki_abstract-hashes-sql-groupby-title-limit-0-100.yml`
+- Vector SQL benchmark pair:
+  `tests/benchmarks/vecsim-arxiv-titles-384-angular-filters-m16-ef-128-tag-filter-sql-surface.yml`
+  and
+  `tests/benchmarks/vecsim-arxiv-titles-384-angular-filters-m16-ef-128-tag-filter-sql.yml`
+- Hybrid SQL benchmark pair:
+  `tests/benchmarks/vecsim-arxiv-titles-384-angular-filters-m16-ef-128-hybrid-tag-filter-sql-surface.yml`
+  and
+  `tests/benchmarks/vecsim-arxiv-titles-384-angular-filters-m16-ef-128-hybrid-tag-filter-sql.yml`
+
+### Sign-Off Expectations
+
+- run the Criterion microbench before release review and capture uncached,
+  cached, and schema-churn numbers
+- run each SQL YAML against its native baseline on the same setup and compare
+  p50/p95 latency plus throughput
+- treat the numbers as release evidence, not as static golden values committed
+  into the repo
 
 ---
 
@@ -478,7 +543,8 @@ fn translate_equality(field: &str, value: &str) -> String {
 1. **Query size limit**: Maximum 64KB SQL query
 2. **Nesting depth limit**: Maximum 32 levels of nested expressions
 3. **IN clause limit**: Maximum 1000 values in single IN clause
-4. **Timeout**: Translation timeout of 100ms (prevents pathological queries)
+4. **Structural limits instead of timeout**: GA v1 relies on deterministic
+   complexity limits rather than an in-process translation timeout
 
 ### Query Complexity Limits
 
@@ -490,7 +556,6 @@ const MAX_NESTING_DEPTH: usize = 32;
 const MAX_IN_VALUES: usize = 1000;
 const MAX_SELECT_COLUMNS: usize = 100;
 const MAX_ORDER_BY_COLUMNS: usize = 8;
-const TRANSLATION_TIMEOUT_MS: u64 = 100;
 ```
 
 ---
@@ -566,20 +631,20 @@ def test_sql_syntax_error(env):
 
 ### Performance Tests
 
-Location: `tests/benchmark/sql_benchmark.py`
+Locations:
+- `src/redisearch_rs/sql_parser/benches/sql_translation.rs`
+- `tests/benchmarks/SQL_BENCHMARKS.md`
 
-```python
-def benchmark_translation_overhead():
-    """Measure SQL→RQL translation overhead"""
-    queries = load_test_queries()
+The performance test plan is intentionally split:
+1. Criterion microbenchmarks measure translation overhead, cache hits, cache
+   misses, and cache stats overhead inside the Rust SQL layer.
+2. `redisbench-admin` YAML benchmarks compare `FT.SQL` to equivalent native
+   `FT.SEARCH`, `FT.AGGREGATE`, and `FT.HYBRID` command shapes on the same
+   datasets.
 
-    for query in queries:
-        sql_time = timeit(lambda: conn.execute_command('FT.SQL', query['sql']))
-        rql_time = timeit(lambda: conn.execute_command('FT.SEARCH', *query['rql']))
-
-        overhead = (sql_time - rql_time) / rql_time * 100
-        assert overhead < 10, f"Translation overhead {overhead}% exceeds 10%"
-```
+The SQL release review should use those artifacts to capture real measurements
+on release hardware rather than rely on a placeholder script or hard-coded
+assertion.
 
 ---
 
@@ -597,10 +662,9 @@ FT.CONFIG SET SQL_ENABLED true|false
 
 ### Documentation Updates
 
-1. **New page**: `docs/commands/FT.SQL.md` - Command reference
-2. **Examples page**: Common SQL queries and their RQL equivalents
-3. **Migration guide**: For users coming from SQL databases
-4. **Limitations page**: What's not supported and why
+1. **Command reference**: `commands/FT.SQL.md` - authoritative supported surface
+2. **Verified guide**: `SQL_TEST_GUIDE.md` - examples aligned with passing behavioral tests
+3. **Command metadata**: `commands.json` - machine-readable `FT.SQL` entry for command docs/tooling
 
 ### Rollout Phases
 
@@ -624,6 +688,31 @@ FT.CONFIG SET SQL_ENABLED true|false
 - Feature flag on by default
 - Requires separate validation and rollout sign-off
 - Additional SQL surface area only after separate validation
+- The target GA surface is the scope-freeze matrix above; anything outside that matrix stays post-GA even if discussed elsewhere in this design doc
+
+### Remaining TODO: Item 8 (Release Gate)
+
+Status: open.
+
+This is the remaining closure item after the implementation, hardening,
+coverage, documentation, and benchmark work. Until this item is closed,
+`FT.SQL` remains experimental/beta and `SQL_ENABLED` stays `false` by default.
+
+The release gate is:
+
+- keep `SQL_ENABLED=false` by default in the shipped configuration
+- require no open P0/P1 SQL semantic-layer audit issues
+- require the supported SQL behavioral matrix to pass in every deployment mode
+  claimed by the command reference
+- require benchmark evidence from the SQL microbenchmarks and the paired native
+  versus SQL end-to-end benchmarks
+- require an explicit rollback plan, with `FT.CONFIG SET SQL_ENABLED false` as
+  the immediate disable path
+- require an explicit release-owner sign-off before any default-on change
+
+Closing item `8` means the branch can make a deliberate GA/default-on decision.
+Until then, the branch may be feature-complete for the audited SQL surface, but
+it is not yet release-complete.
 
 ---
 
@@ -668,8 +757,9 @@ OPTION (vector_weight = 0.7, text_weight = 0.3)
 ```
 
 - `OPTION` requires a vector `ORDER BY`
-- The translator emits `FT.HYBRID`
+- The translator target is the live `FT.HYBRID SEARCH ... VSIM ... COMBINE LINEAR ... PARAMS` grammar
 - `vector_weight` and `text_weight` default to `0.5` when omitted
+- SQL v1 does not expose other Hybrid-only clauses
 
 ### Geospatial Queries
 
@@ -774,4 +864,3 @@ FT.SEARCH articles
 
 > Note: The Rust SQL translation cache is an internal implementation detail and
 > is not exposed as an operator-facing configuration.
-

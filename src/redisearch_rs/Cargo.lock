@@ -2445,6 +2445,7 @@ dependencies = [
 name = "sql_parser"
 version = "0.0.1"
 dependencies = [
+ "criterion",
  "sqlparser",
  "thiserror",
  "workspace_hack",
