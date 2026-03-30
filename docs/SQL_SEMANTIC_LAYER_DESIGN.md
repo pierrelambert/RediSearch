@@ -646,6 +646,10 @@ The SQL release review should use those artifacts to capture real measurements
 on release hardware rather than rely on a placeholder script or hard-coded
 assertion.
 
+`tests/benchmarks/SQL_BENCHMARKS.md` includes the in-repo workflow and release
+evidence template. The actual release-hardware measurements are intentionally an
+external sign-off artifact and are not closed by this branch alone.
+
 ---
 
 ## 9. Migration Path
@@ -706,6 +710,8 @@ The release gate is:
   claimed by the command reference
 - require benchmark evidence from the SQL microbenchmarks and the paired native
   versus SQL end-to-end benchmarks
+- require the release evidence template from `tests/benchmarks/SQL_BENCHMARKS.md`
+  to be filled with release-hardware results for the target build
 - require an explicit rollback plan, with `FT.CONFIG SET SQL_ENABLED false` as
   the immediate disable path
 - require an explicit release-owner sign-off before any default-on change

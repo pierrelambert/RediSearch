@@ -14,19 +14,79 @@ This guide documents only examples that map to module-level behavioral tests.
 It intentionally omits older exploratory examples that were broader than the
 audited branch surface.
 
+## Local Verification Snapshot (2026-03-30)
+
+- Conclusion: `FT.SQL` is technically cleaner and locally well verified in-repo,
+  but it is **not** ready for GA/default-on in this branch.
+- Runtime status remains unchanged: experimental/beta and guarded by
+  `SQL_ENABLED=false` by default.
+- Verified locally in-repo:
+  - Rust translator regression coverage for boolean precedence, including
+    `(A OR B) AND NOT C` composition.
+  - Python behavioral coverage for the SQL surface, including the default-off
+    gate and runtime disable path.
+  - Criterion translation microbenchmarks with reports under
+    `bin/redisearch_rs/criterion/`.
+- Concrete local results captured on 2026-03-30:
+  - `./build.sh RUN_PYTEST TEST=test_sql_layer.py`: passed (`46/46`)
+  - `./build.sh RUN_PYTEST TEST=test_config.py::testConfigAPIRunTimeBooleanParams`:
+    passed
+  - targeted Rust translator regression for boolean precedence: passed
+  - translation microbenchmarks completed and produced Criterion reports
+- Still open before any default-on decision:
+  - release-hardware paired benchmark results for the SQL/native YAML pairs
+  - release-owner sign-off on the default-on change
+  - full-text benchmark pair execution in an environment that provides
+    `ftsb_redisearch`
+  - stable timed local `redisbench-admin` evidence for the vector/hybrid pair in
+    this macOS checkout; dry-run and preload succeeded, but the timed run hit a
+    `BusyLoadingError` before producing a result artifact
+
+## Local Benchmark Results (2026-03-30)
+
+Criterion translation microbenchmarks:
+
+| Scenario | Mean |
+|----------|------|
+| uncached basic search | ~10.01 µs |
+| uncached aggregate/group-by | ~19.14 µs |
+| uncached vector KNN | ~9.26 µs |
+| uncached weighted hybrid | ~10.25 µs |
+| cached-hot basic search | ~624 ns |
+| cached-hot aggregate/group-by | ~1.13 µs |
+| cached-hot vector KNN | ~369 ns |
+| cached-hot weighted hybrid | ~1.20 µs |
+| schema-churn miss (basic search) | ~12.53 µs |
+| schema-churn miss (hybrid) | ~13.13 µs |
+| cache stats read | ~14.7 ns |
+
+Local end-to-end benchmark status:
+
+- `redisbench-admin` dry-run with preload for the SQL vector benchmark:
+  succeeded (Redis start, dataset preload, `SQL_ENABLED=true`, index load, and
+  connectivity checks all passed)
+- timed local SQL vector run: did not complete successfully in this checkout;
+  failed with `redis.exceptions.BusyLoadingError` and produced no result JSON
+
 ## Verified Surface
 
 | Surface | Current branch status | Backend |
 |---------|-----------------------|---------|
 | `SELECT *`, projection, aliases, `LIMIT/OFFSET` | Verified | `FT.SEARCH` |
 | Equality on `TAG`, numeric comparisons, `BETWEEN` | Verified | `FT.SEARCH` |
+| `IN` / `NOT IN` | Verified | `FT.SEARCH` |
+| `LIKE` / `NOT LIKE` | Verified | `FT.SEARCH` |
+| `IS NULL` / `IS NOT NULL` on `INDEXMISSING` fields | Verified | `FT.SEARCH` |
+| Boolean composition with `AND` / `OR` / `NOT` | Verified | `FT.SEARCH` |
 | Single-column `ORDER BY` on plain queries | Verified | `FT.SEARCH` |
 | `GROUP BY`, aggregate aliases, `HAVING` | Verified | `FT.AGGREGATE` |
 | Multi-column `ORDER BY` on aggregate queries | Verified | `FT.AGGREGATE` |
 | pgvector-style KNN (`<->`) | Verified | `FT.SEARCH` |
 | Weighted Hybrid via `OPTION (vector_weight, text_weight)` | Verified | `FT.HYBRID` |
 | JSON indexes with aliased fields | Verified | `FT.SEARCH` |
-| Coordinator/public `FT.SQL` registration | Verified smoke test | Public coordinator path |
+| Practical RediSearch index names such as `idx:all` | Verified | Parser + public command path |
+| Coordinator/public path search and aggregate parity | Verified | Public coordinator path |
+| Coordinator/public path vector, Hybrid, and JSON coverage | Verified behavioral coverage | Public coordinator path |
 | Advanced Hybrid knobs beyond weights | Not supported | N/A |
 | Multi-column `ORDER BY` on plain search queries | Rejected | N/A |
 | Dedicated SQL full-text predicates, joins, subqueries, `UNION`, geo SQL | Not supported | N/A |
@@ -69,12 +129,56 @@ redis-cli FT.SQL "SELECT name, price FROM products"
 redis-cli FT.SQL "SELECT name, stock FROM products WHERE price > 50"
 redis-cli FT.SQL "SELECT * FROM products WHERE price BETWEEN 50 AND 200"
 redis-cli FT.SQL "SELECT * FROM products ORDER BY price DESC LIMIT 2 OFFSET 1"
+redis-cli FT.SQL "SELECT category, price FROM idx:all WHERE category = 'electronics' ORDER BY price ASC LIMIT 1"
 ```
 
 Backed by:
 `test_sql_select_star`, `test_sql_select_fields`,
 `test_sql_select_fields_with_where`, `test_sql_where_between`,
-`test_sql_order_by_desc`, and `test_sql_limit_offset`.
+`test_sql_order_by_desc`, `test_sql_limit_offset`, and
+`test_sql_search_parity_with_colon_index_name`.
+
+### Predicate Surface
+
+```bash
+redis-cli FT.SQL \
+  "SELECT category, price FROM products \
+   WHERE category IN ('electronics', 'accessories') ORDER BY price ASC LIMIT 10"
+
+redis-cli FT.SQL \
+  "SELECT category, price FROM products \
+   WHERE category NOT IN ('clearance', 'furniture') ORDER BY price ASC LIMIT 10"
+
+redis-cli FT.SQL \
+  "SELECT name FROM products \
+   WHERE name LIKE '%top' ORDER BY name ASC LIMIT 10"
+
+redis-cli FT.SQL \
+  "SELECT name FROM products \
+   WHERE name NOT LIKE '%top' ORDER BY name ASC LIMIT 10"
+
+redis-cli FT.SQL \
+  "SELECT title, rank FROM products \
+   WHERE nickname IS NULL ORDER BY rank ASC LIMIT 10"
+
+redis-cli FT.SQL \
+  "SELECT title, rank FROM products \
+   WHERE nickname IS NOT NULL ORDER BY rank ASC LIMIT 10"
+
+redis-cli FT.SQL \
+  "SELECT category, price FROM products \
+   WHERE (category = 'electronics' OR category = 'accessories') \
+   AND NOT (status = 'archived') ORDER BY price ASC LIMIT 10"
+```
+
+Backed by:
+`test_sql_in_parity`, `test_sql_not_in_parity`, `test_sql_like_parity`,
+`test_sql_not_like_parity`, `test_sql_is_null_parity`,
+`test_sql_is_not_null_parity`, and `test_sql_boolean_composition_parity`.
+
+Leading-wildcard `LIKE` examples depend on underlying RediSearch field options
+such as `WITHSUFFIXTRIE`. The behavioral tests use wildcard-capable TEXT fields
+for those cases.
 
 ### Aggregation
 
@@ -135,10 +239,16 @@ redis-cli FT.SQL \
 
 Backed by `test_sql_json_index_search_parity`.
 
-### Coordinator / Cluster Smoke
+### Coordinator / Cluster Coverage
 
-Use the same SQL syntax in cluster mode. The coordinator/public registration path
-is covered by `test_sql_cluster_search_parity`.
+Use the same SQL syntax in cluster mode. The coordinator/public path is covered
+by:
+
+- `test_sql_cluster_search_parity`
+- `test_sql_cluster_aggregate_parity`
+- `test_sql_cluster_vector_knn_parity`
+- `test_sql_cluster_hybrid_parity`
+- `test_sql_cluster_json_index_search_parity`
 
 ## Rejected And Unsupported Forms
 
@@ -179,7 +289,6 @@ These guards are enforced before execution in the Rust validation layer.
   `FT.SEARCH`, `FT.AGGREGATE`, or `FT.HYBRID`.
 - `IS NULL` / `IS NOT NULL` depend on the underlying field being indexed with
   `INDEXMISSING`.
-- The broader SQL closure target still includes additional operators such as
-  `IN` / `NOT IN`, `LIKE` / `NOT LIKE`, and boolean composition. Those remain
-  tracked in the design doc, but this guide keeps its examples limited to the
-  branch behaviors currently covered by module-level tests.
+- `FT.SQL` remains experimental/beta and default-off in this branch. The
+  external release gate for benchmark evidence and release-owner approval is
+  still open.

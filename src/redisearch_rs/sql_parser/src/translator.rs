@@ -250,7 +250,9 @@ fn translate_condition(condition: &Condition, schema: &QuerySchema) -> Result<St
             // OR conditions in RQL use | operator with spaces between parenthesized sub-conditions
             let left_str = translate_condition(left, schema)?;
             let right_str = translate_condition(right, schema)?;
-            Ok(format!("({left_str}) | ({right_str})"))
+            // Wrap the full OR expression so it remains a single unit when joined with
+            // other top-level conditions using implicit AND (space-separated syntax).
+            Ok(format!("(({left_str}) | ({right_str}))"))
         }
         Condition::Not(inner) => {
             // NOT negates the inner condition with - prefix
@@ -890,7 +892,33 @@ mod tests {
         ));
         let result = translate(query).unwrap();
         // RQL OR requires spaces around pipe between parenthesized sub-conditions
-        assert_eq!(result.query_string, "(@a:[1 1]) | (@b:[2 2])");
+        assert_eq!(result.query_string, "((@a:[1 1]) | (@b:[2 2]))");
+    }
+
+    #[test]
+    fn test_translate_or_grouped_when_combined_with_not() {
+        let query = SelectQuery::new("idx")
+            .with_condition(Condition::Or(
+                Box::new(Condition::Equals {
+                    field: "category".to_string(),
+                    value: Value::String("electronics".to_string()),
+                }),
+                Box::new(Condition::Equals {
+                    field: "category".to_string(),
+                    value: Value::String("accessories".to_string()),
+                }),
+            ))
+            .with_condition(Condition::Not(Box::new(Condition::Equals {
+                field: "status".to_string(),
+                value: Value::String("archived".to_string()),
+            })));
+
+        let result = translate(query).unwrap();
+
+        assert_eq!(
+            result.query_string,
+            "((@category:{electronics}) | (@category:{accessories})) -(@status:{archived})"
+        );
     }
 
     // Vector search tests

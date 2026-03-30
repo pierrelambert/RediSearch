@@ -293,6 +293,14 @@ mod tests {
     }
 
     #[test]
+    fn test_select_star_with_colon_index_name() {
+        let result = translate("SELECT * FROM idx:all").unwrap();
+        assert_eq!(result.index_name, "idx:all");
+        assert_eq!(result.query_string, "*");
+        assert!(result.arguments.is_empty());
+    }
+
+    #[test]
     fn test_where_string_equality() {
         let result = translate("SELECT * FROM idx WHERE status = 'active'").unwrap();
         // String equality uses TAG syntax with curly braces for exact match

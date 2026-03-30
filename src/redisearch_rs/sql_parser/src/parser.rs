@@ -36,10 +36,11 @@ struct QueryOptions {
 pub fn parse(sql: &str) -> Result<SelectQuery, SqlError> {
     // Extract OPTION clause if present (non-standard SQL extension)
     let (sql_without_options, options) = extract_option_clause(sql)?;
+    let sql_for_parser = quote_nonstandard_from_identifier(&sql_without_options);
 
     // Use PostgreSQL dialect to support <-> (L2 distance) operator from pgvector
     let dialect = PostgreSqlDialect {};
-    let statements = Parser::parse_sql(&dialect, &sql_without_options)?;
+    let statements = Parser::parse_sql(&dialect, &sql_for_parser)?;
 
     if statements.is_empty() {
         return Err(SqlError::syntax("Empty query"));
@@ -58,6 +59,102 @@ pub fn parse(sql: &str) -> Result<SelectQuery, SqlError> {
     apply_hybrid_options(&mut query, &options)?;
 
     Ok(query)
+}
+
+fn quote_nonstandard_from_identifier(sql: &str) -> String {
+    let Some(from_start) = find_keyword_outside_quotes(sql, "from") else {
+        return sql.to_string();
+    };
+
+    let relation_start = sql[from_start + 4..]
+        .char_indices()
+        .find_map(|(offset, ch)| (!ch.is_whitespace()).then_some(from_start + 4 + offset));
+    let Some(relation_start) = relation_start else {
+        return sql.to_string();
+    };
+
+    if sql[relation_start..].starts_with('"') {
+        return sql.to_string();
+    }
+
+    let relation_end = sql[relation_start..]
+        .char_indices()
+        .find_map(|(offset, ch)| is_relation_terminator(ch).then_some(relation_start + offset))
+        .unwrap_or(sql.len());
+
+    let relation_name = &sql[relation_start..relation_end];
+    if !relation_name.chars().any(needs_identifier_quoting) {
+        return sql.to_string();
+    }
+
+    let mut rewritten = String::with_capacity(sql.len() + 2);
+    rewritten.push_str(&sql[..relation_start]);
+    rewritten.push('"');
+    rewritten.push_str(relation_name);
+    rewritten.push('"');
+    rewritten.push_str(&sql[relation_end..]);
+    rewritten
+}
+
+fn find_keyword_outside_quotes(sql: &str, keyword: &str) -> Option<usize> {
+    let keyword_len = keyword.len();
+    let lowercase_sql = sql.to_ascii_lowercase();
+    let bytes = lowercase_sql.as_bytes();
+    let keyword_bytes = keyword.as_bytes();
+
+    let mut in_single_quote = false;
+    let mut in_double_quote = false;
+
+    let mut i = 0;
+    while i + keyword_len <= bytes.len() {
+        match bytes[i] {
+            b'\'' if !in_double_quote => {
+                in_single_quote = !in_single_quote;
+                i += 1;
+                continue;
+            }
+            b'"' if !in_single_quote => {
+                in_double_quote = !in_double_quote;
+                i += 1;
+                continue;
+            }
+            _ => {}
+        }
+
+        if in_single_quote || in_double_quote {
+            i += 1;
+            continue;
+        }
+
+        if &bytes[i..i + keyword_len] == keyword_bytes {
+            let prev_ok = i == 0 || !bytes[i - 1].is_ascii_alphanumeric() && bytes[i - 1] != b'_';
+            let next_ok = i + keyword_len == bytes.len()
+                || !bytes[i + keyword_len].is_ascii_alphanumeric()
+                    && bytes[i + keyword_len] != b'_';
+            if prev_ok && next_ok {
+                return Some(i);
+            }
+        }
+
+        i += 1;
+    }
+
+    None
+}
+
+fn is_relation_terminator(ch: char) -> bool {
+    ch.is_whitespace() || matches!(ch, ',' | ';' | ')')
+}
+
+fn needs_identifier_quoting(ch: char) -> bool {
+    !(ch.is_ascii_alphanumeric() || ch == '_' || ch == '$' || ch == '.')
+}
+
+fn normalize_relation_name(name: &str) -> String {
+    name.strip_prefix('"')
+        .and_then(|trimmed| trimmed.strip_suffix('"'))
+        .unwrap_or(name)
+        .to_string()
 }
 
 /// Extract OPTION clause from SQL and return the SQL without it.
@@ -666,7 +763,7 @@ fn parse_from_clause(from: &[sqlparser::ast::TableWithJoins]) -> Result<String, 
     }
 
     match &table.relation {
-        TableFactor::Table { name, .. } => Ok(name.to_string()),
+        TableFactor::Table { name, .. } => Ok(normalize_relation_name(&name.to_string())),
         _ => Err(SqlError::unsupported(
             "Only simple table references are supported",
         )),
@@ -1099,6 +1196,14 @@ mod tests {
         let query = parse("SELECT * FROM test_idx").unwrap();
         assert_eq!(query.index_name, "test_idx");
         assert!(query.fields.is_empty()); // SELECT * means empty fields
+        assert!(query.conditions.is_empty());
+    }
+
+    #[test]
+    fn test_parse_simple_select_with_colon_index_name() {
+        let query = parse("SELECT * FROM idx:all").unwrap();
+        assert_eq!(query.index_name, "idx:all");
+        assert!(query.fields.is_empty());
         assert!(query.conditions.is_empty());
     }
 

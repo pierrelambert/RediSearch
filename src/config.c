@@ -1612,6 +1612,10 @@ RSConfigOptions RSGlobalConfigOptions = {
          .helpText = "Enable unstable features.",
          .setValue = set_EnableUnstableFeatures,
          .getValue = get_EnableUnstableFeatures},
+        {.name = "SQL_ENABLED",
+         .helpText = "Enable the experimental FT.SQL command.",
+         .setValue = setSqlEnabled,
+         .getValue = getSqlEnabled},
         {.name = "_BG_INDEX_MEM_PCT_THR",
          .helpText = "Set the percentage of memory usage threshold (out of maxmemory) at which background indexing will stop. The default is 100 percent.",
          .setValue = setIndexingMemoryLimit,
@@ -2337,6 +2341,15 @@ int RegisterModuleConfig_Local(RedisModuleCtx *ctx) {
       REDISMODULE_CONFIG_UNPREFIXED,
       get_bool_config, set_bool_config, NULL,
       (void *)&(RSGlobalConfig.enableUnstableFeatures)
+    )
+  )
+
+  RM_TRY(
+    RedisModule_RegisterBoolConfig(
+      ctx, "search-sql-enabled", 0,
+      REDISMODULE_CONFIG_UNPREFIXED,
+      get_bool_config, set_bool_config, NULL,
+      (void *)&(RSGlobalConfig.sqlEnabled)
     )
   )
 

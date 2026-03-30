@@ -19,8 +19,26 @@ import json
 from common import *
 
 
+def _sql_config_cmd(env):
+    cached = getattr(env, '_sql_config_cmd_name', None)
+    if cached is not None:
+        return cached
+
+    for command in ('_FT.CONFIG', 'FT.CONFIG'):
+        try:
+            env.cmd(command, 'GET', 'SQL_ENABLED')
+            env._sql_config_cmd_name = command
+            return command
+        except redis_exceptions.ResponseError as error:
+            if 'unknown command' in str(error).lower():
+                continue
+            raise
+
+    raise AssertionError('Neither _FT.CONFIG nor FT.CONFIG is available in this test environment')
+
+
 def _enable_sql(env):
-    env.expect(config_cmd(), 'SET', 'SQL_ENABLED', 'true').ok()
+    env.expect(_sql_config_cmd(env), 'SET', 'SQL_ENABLED', 'true').ok()
 
 
 def _get_sql_connection(env):
@@ -83,7 +101,7 @@ def test_sql_disabled_by_default():
     if env.env == 'existing-env':
         env.skip()
 
-    env.expect(config_cmd(), 'GET', 'SQL_ENABLED').equal([['SQL_ENABLED', 'false']])
+    env.expect(_sql_config_cmd(env), 'GET', 'SQL_ENABLED').equal([['SQL_ENABLED', 'false']])
     env.expect('FT.SQL', 'SELECT * FROM idx').error().contains('FT.SQL is disabled')
     env.stop()
 
@@ -94,7 +112,7 @@ def test_sql_runtime_disable_blocks_queries(env):
     env.cmd('FT.CREATE', 'idx', 'SCHEMA', 'name', 'TEXT')
     env.cmd('FT.SQL', "SELECT * FROM idx")
 
-    env.expect(config_cmd(), 'SET', 'SQL_ENABLED', 'false').ok()
+    env.expect(_sql_config_cmd(env), 'SET', 'SQL_ENABLED', 'false').ok()
     env.expect('FT.SQL', "SELECT * FROM idx").error().contains('FT.SQL is disabled')
 
 
@@ -223,6 +241,273 @@ def test_sql_where_between(env):
     sql_result = env.cmd('FT.SQL', "SELECT * FROM idx WHERE price BETWEEN 75 AND 125")
 
     env.assertEqual(sql_result[0], 1)  # Only doc2 (price=100)
+
+
+def test_sql_search_parity_with_colon_index_name(env):
+    """FT.SQL should accept practical RediSearch index names such as idx:all."""
+    conn = _get_sql_connection(env)
+
+    env.cmd('FT.CREATE', 'idx:all', 'SCHEMA', 'category', 'TAG', 'price', 'NUMERIC', 'SORTABLE')
+    conn.execute_command('HSET', 'doc1', 'category', 'electronics', 'price', '100')
+    conn.execute_command('HSET', 'doc2', 'category', 'furniture', 'price', '200')
+    waitForIndex(env, 'idx:all')
+
+    sql_result = env.cmd(
+        'FT.SQL',
+        "SELECT category, price FROM idx:all WHERE category = 'electronics' ORDER BY price ASC LIMIT 1"
+    )
+    native_result = env.cmd(
+        'FT.SEARCH', 'idx:all', '@category:{electronics}',
+        'SORTBY', 'price', 'ASC',
+        'RETURN', '2', 'category', 'price',
+        'LIMIT', '0', '1',
+        'DIALECT', '2'
+    )
+
+    _assert_search_parity(env, sql_result, native_result)
+
+
+def test_sql_in_parity(env):
+    """FT.SQL IN on TAG fields should match FT.SEARCH tag union semantics."""
+    conn = _get_sql_connection(env)
+
+    env.cmd('FT.CREATE', 'idx', 'SCHEMA', 'category', 'TAG', 'price', 'NUMERIC', 'SORTABLE')
+
+    docs = [
+        ('doc1', 'electronics', '100'),
+        ('doc2', 'accessories', '150'),
+        ('doc3', 'furniture', '200'),
+    ]
+    for doc_id, category, price in docs:
+        conn.execute_command('HSET', doc_id, 'category', category, 'price', price)
+    waitForIndex(env, 'idx')
+
+    sql_result = env.cmd(
+        'FT.SQL',
+        "SELECT category, price FROM idx "
+        "WHERE category IN ('electronics', 'accessories') ORDER BY price ASC LIMIT 10"
+    )
+    native_result = env.cmd(
+        'FT.SEARCH', 'idx', '@category:{electronics|accessories}',
+        'SORTBY', 'price', 'ASC',
+        'RETURN', '2', 'category', 'price',
+        'LIMIT', '0', '10',
+        'DIALECT', '2'
+    )
+
+    _assert_search_parity(env, sql_result, native_result)
+
+
+def test_sql_not_in_parity(env):
+    """FT.SQL NOT IN on TAG fields should match FT.SEARCH negated tag union semantics."""
+    conn = _get_sql_connection(env)
+
+    env.cmd('FT.CREATE', 'idx', 'SCHEMA', 'category', 'TAG', 'price', 'NUMERIC', 'SORTABLE')
+
+    docs = [
+        ('doc1', 'electronics', '100'),
+        ('doc2', 'accessories', '150'),
+        ('doc3', 'furniture', '200'),
+        ('doc4', 'clearance', '250'),
+    ]
+    for doc_id, category, price in docs:
+        conn.execute_command('HSET', doc_id, 'category', category, 'price', price)
+    waitForIndex(env, 'idx')
+
+    sql_result = env.cmd(
+        'FT.SQL',
+        "SELECT category, price FROM idx "
+        "WHERE category NOT IN ('clearance', 'furniture') ORDER BY price ASC LIMIT 10"
+    )
+    native_result = env.cmd(
+        'FT.SEARCH', 'idx', '-@category:{clearance|furniture}',
+        'SORTBY', 'price', 'ASC',
+        'RETURN', '2', 'category', 'price',
+        'LIMIT', '0', '10',
+        'DIALECT', '2'
+    )
+
+    _assert_search_parity(env, sql_result, native_result)
+
+
+def test_sql_like_parity(env):
+    """FT.SQL LIKE should match FT.SEARCH wildcard syntax on wildcard-capable text fields."""
+    conn = _get_sql_connection(env)
+
+    env.cmd(
+        'FT.CREATE', 'idx', 'SCHEMA',
+        'name', 'TEXT', 'WITHSUFFIXTRIE', 'SORTABLE',
+        'category', 'TAG'
+    )
+
+    for doc_id, name, category in (
+        ('doc1', 'Laptop', 'portable'),
+        ('doc2', 'Desktop', 'workstation'),
+        ('doc3', 'Phone', 'mobile'),
+    ):
+        conn.execute_command('HSET', doc_id, 'name', name, 'category', category)
+    waitForIndex(env, 'idx')
+
+    sql_result = env.cmd(
+        'FT.SQL',
+        "SELECT name FROM idx WHERE name LIKE '%top' ORDER BY name ASC LIMIT 10"
+    )
+    native_result = env.cmd(
+        'FT.SEARCH', 'idx', '@name:*top',
+        'SORTBY', 'name', 'ASC',
+        'RETURN', '1', 'name',
+        'LIMIT', '0', '10',
+        'DIALECT', '2'
+    )
+
+    _assert_search_parity(env, sql_result, native_result)
+
+
+def test_sql_not_like_parity(env):
+    """FT.SQL NOT LIKE should match FT.SEARCH negated wildcard syntax."""
+    conn = _get_sql_connection(env)
+
+    env.cmd(
+        'FT.CREATE', 'idx', 'SCHEMA',
+        'name', 'TEXT', 'WITHSUFFIXTRIE', 'SORTABLE'
+    )
+
+    for doc_id, name in (
+        ('doc1', 'Laptop'),
+        ('doc2', 'Desktop'),
+        ('doc3', 'Phone'),
+    ):
+        conn.execute_command('HSET', doc_id, 'name', name)
+    waitForIndex(env, 'idx')
+
+    sql_result = env.cmd(
+        'FT.SQL',
+        "SELECT name FROM idx WHERE name NOT LIKE '%top' ORDER BY name ASC LIMIT 10"
+    )
+    native_result = env.cmd(
+        'FT.SEARCH', 'idx', '-@name:*top',
+        'SORTBY', 'name', 'ASC',
+        'RETURN', '1', 'name',
+        'LIMIT', '0', '10',
+        'DIALECT', '2'
+    )
+
+    _assert_search_parity(env, sql_result, native_result)
+
+
+def test_sql_is_null_parity(env):
+    """FT.SQL IS NULL should match FT.SEARCH ismissing() on INDEXMISSING fields."""
+    conn = _get_sql_connection(env)
+
+    env.cmd(
+        'FT.CREATE', 'idx', 'SCHEMA',
+        'title', 'TEXT', 'SORTABLE',
+        'nickname', 'TAG', 'INDEXMISSING',
+        'rank', 'NUMERIC', 'SORTABLE'
+    )
+
+    docs = [
+        ('doc1', 'Alpha', 'ace', '1'),
+        ('doc2', 'Bravo', None, '2'),
+        ('doc3', 'Charlie', None, '3'),
+    ]
+    for doc_id, title, nickname, rank in docs:
+        args = ['HSET', doc_id, 'title', title, 'rank', rank]
+        if nickname is not None:
+            args.extend(['nickname', nickname])
+        conn.execute_command(*args)
+    waitForIndex(env, 'idx')
+
+    sql_result = env.cmd(
+        'FT.SQL',
+        "SELECT title, rank FROM idx WHERE nickname IS NULL ORDER BY rank ASC LIMIT 10"
+    )
+    native_result = env.cmd(
+        'FT.SEARCH', 'idx', 'ismissing(@nickname)',
+        'SORTBY', 'rank', 'ASC',
+        'RETURN', '2', 'title', 'rank',
+        'LIMIT', '0', '10',
+        'DIALECT', '2'
+    )
+
+    _assert_search_parity(env, sql_result, native_result)
+
+
+def test_sql_is_not_null_parity(env):
+    """FT.SQL IS NOT NULL should match FT.SEARCH negated ismissing() on INDEXMISSING fields."""
+    conn = _get_sql_connection(env)
+
+    env.cmd(
+        'FT.CREATE', 'idx', 'SCHEMA',
+        'title', 'TEXT', 'SORTABLE',
+        'nickname', 'TAG', 'INDEXMISSING',
+        'rank', 'NUMERIC', 'SORTABLE'
+    )
+
+    docs = [
+        ('doc1', 'Alpha', 'ace', '1'),
+        ('doc2', 'Bravo', None, '2'),
+        ('doc3', 'Charlie', 'captain', '3'),
+    ]
+    for doc_id, title, nickname, rank in docs:
+        args = ['HSET', doc_id, 'title', title, 'rank', rank]
+        if nickname is not None:
+            args.extend(['nickname', nickname])
+        conn.execute_command(*args)
+    waitForIndex(env, 'idx')
+
+    sql_result = env.cmd(
+        'FT.SQL',
+        "SELECT title, rank FROM idx WHERE nickname IS NOT NULL ORDER BY rank ASC LIMIT 10"
+    )
+    native_result = env.cmd(
+        'FT.SEARCH', 'idx', '-ismissing(@nickname)',
+        'SORTBY', 'rank', 'ASC',
+        'RETURN', '2', 'title', 'rank',
+        'LIMIT', '0', '10',
+        'DIALECT', '2'
+    )
+
+    _assert_search_parity(env, sql_result, native_result)
+
+
+def test_sql_boolean_composition_parity(env):
+    """FT.SQL AND/OR/NOT composition should match equivalent FT.SEARCH boolean syntax."""
+    conn = _get_sql_connection(env)
+
+    env.cmd(
+        'FT.CREATE', 'idx', 'SCHEMA',
+        'category', 'TAG',
+        'status', 'TAG',
+        'price', 'NUMERIC', 'SORTABLE'
+    )
+
+    docs = [
+        ('doc1', 'electronics', 'active', '100'),
+        ('doc2', 'accessories', 'active', '50'),
+        ('doc3', 'electronics', 'archived', '200'),
+        ('doc4', 'furniture', 'active', '300'),
+    ]
+    for doc_id, category, status, price in docs:
+        conn.execute_command('HSET', doc_id, 'category', category, 'status', status, 'price', price)
+    waitForIndex(env, 'idx')
+
+    sql_result = env.cmd(
+        'FT.SQL',
+        "SELECT category, price FROM idx "
+        "WHERE (category = 'electronics' OR category = 'accessories') "
+        "AND NOT (status = 'archived') ORDER BY price ASC LIMIT 10"
+    )
+    native_result = env.cmd(
+        'FT.SEARCH', 'idx',
+        '((@category:{electronics}) | (@category:{accessories})) (-(@status:{archived}))',
+        'SORTBY', 'price', 'ASC',
+        'RETURN', '2', 'category', 'price',
+        'LIMIT', '0', '10',
+        'DIALECT', '2'
+    )
+
+    _assert_search_parity(env, sql_result, native_result)
 
 
 # =============================================================================
@@ -734,6 +1019,162 @@ def test_sql_cluster_search_parity(env):
     ]
     for doc_id, name, category, price in docs:
         conn.execute_command('HSET', doc_id, 'name', name, 'category', category, 'price', price)
+    waitForIndex(env, 'idx')
+
+    sql_result = env.cmd(
+        'FT.SQL',
+        "SELECT name, price FROM idx WHERE category = 'electronics' ORDER BY price ASC LIMIT 2"
+    )
+    native_result = env.cmd(
+        'FT.SEARCH', 'idx', '@category:{electronics}',
+        'SORTBY', 'price', 'ASC',
+        'RETURN', '2', 'name', 'price',
+        'LIMIT', '0', '2'
+    )
+
+    _assert_search_parity(env, sql_result, native_result)
+
+
+@skip(cluster=False)
+def test_sql_cluster_aggregate_parity(env):
+    """FT.SQL aggregates should route through the coordinator/public command path."""
+    conn = _get_sql_connection(env)
+
+    env.cmd(
+        'FT.CREATE', 'idx', 'ON', 'HASH', 'PREFIX', '1', 'doc:',
+        'SCHEMA',
+        'category', 'TAG',
+        'price', 'NUMERIC'
+    )
+
+    docs = [
+        ('doc:1', 'electronics', '100'),
+        ('doc:2', 'electronics', '300'),
+        ('doc:3', 'furniture', '200'),
+        ('doc:4', 'furniture', '400'),
+        ('doc:5', 'clearance', '900'),
+    ]
+    for doc_id, category, price in docs:
+        conn.execute_command('HSET', doc_id, 'category', category, 'price', price)
+    waitForIndex(env, 'idx')
+
+    sql_result = env.cmd(
+        'FT.SQL',
+        "SELECT category, COUNT(*) AS cnt, AVG(price) AS avg_price "
+        "FROM idx GROUP BY category HAVING COUNT(*) >= 2 ORDER BY category ASC"
+    )
+    native_result = env.cmd(
+        'FT.AGGREGATE', 'idx', '*',
+        'GROUPBY', '1', '@category',
+        'REDUCE', 'COUNT', '0', 'AS', 'cnt',
+        'REDUCE', 'AVG', '1', '@price', 'AS', 'avg_price',
+        'FILTER', '@cnt>=2',
+        'SORTBY', '2', '@category', 'ASC'
+    )
+
+    _assert_aggregate_parity(env, sql_result, native_result)
+
+
+@skip(cluster=False)
+def test_sql_cluster_vector_knn_parity(env):
+    """FT.SQL vector KNN should work on the coordinator/public command path."""
+    conn = _get_sql_connection(env)
+
+    env.cmd(
+        'FT.CREATE', 'idx', 'ON', 'HASH', 'PREFIX', '1', 'doc:',
+        'SCHEMA',
+        'category', 'TAG',
+        'embedding', 'VECTOR', 'FLAT', 6, 'TYPE', 'FLOAT32', 'DIM', 2, 'DISTANCE_METRIC', 'L2'
+    )
+
+    docs = [
+        ('doc:1', 'electronics', np.array([0.0, 0.0]).astype(np.float32).tobytes()),
+        ('doc:2', 'electronics', np.array([1.0, 0.0]).astype(np.float32).tobytes()),
+        ('doc:3', 'electronics', np.array([0.0, 2.0]).astype(np.float32).tobytes()),
+        ('doc:4', 'accessories', np.array([0.0, 0.0]).astype(np.float32).tobytes()),
+    ]
+    for doc_id, category, vector in docs:
+        conn.execute_command('HSET', doc_id, 'category', category, 'embedding', vector)
+    waitForIndex(env, 'idx')
+
+    query_vector = np.array([0.1, 0.0]).astype(np.float32)
+    sql_result = env.cmd(
+        'FT.SQL',
+        "SELECT category FROM idx WHERE category = 'electronics' "
+        "ORDER BY embedding <-> '[0.1, 0.0]' LIMIT 2"
+    )
+    native_result = env.cmd(
+        'FT.SEARCH', 'idx',
+        '@category:{electronics}=>[KNN 2 @embedding $BLOB]',
+        'PARAMS', '2', 'BLOB', query_vector.tobytes(),
+        'RETURN', '1', 'category',
+        'DIALECT', '2'
+    )
+
+    _assert_search_parity(env, sql_result, native_result)
+
+
+@skip(cluster=False)
+def test_sql_cluster_hybrid_parity(env):
+    """FT.SQL weighted Hybrid should work on the coordinator/public command path."""
+    conn = _get_sql_connection(env)
+
+    env.cmd(
+        'FT.CREATE', 'idx', 'ON', 'HASH', 'PREFIX', '1', 'doc:',
+        'SCHEMA',
+        'category', 'TAG',
+        'embedding', 'VECTOR', 'FLAT', 6, 'TYPE', 'FLOAT32', 'DIM', 2, 'DISTANCE_METRIC', 'L2'
+    )
+
+    conn.execute_command('HSET', 'doc:1', 'category', 'electronics',
+                         'embedding', np.array([0.0, 0.0]).astype(np.float32).tobytes())
+    conn.execute_command('HSET', 'doc:2', 'category', 'electronics',
+                         'embedding', np.array([1.0, 0.0]).astype(np.float32).tobytes())
+    conn.execute_command('HSET', 'doc:3', 'category', 'accessories',
+                         'embedding', np.array([0.0, 1.0]).astype(np.float32).tobytes())
+    waitForIndex(env, 'idx')
+
+    query_vector = np.array([0.0, 0.0]).astype(np.float32)
+    sql_result = env.cmd(
+        'FT.SQL',
+        "SELECT * FROM idx WHERE category = 'electronics' "
+        "ORDER BY embedding <-> '[0.0, 0.0]' LIMIT 2 "
+        "OPTION (vector_weight = 0.7, text_weight = 0.3)"
+    )
+    native_result = env.cmd(
+        'FT.HYBRID', 'idx',
+        'SEARCH', '@category:{electronics}',
+        'VSIM', '@embedding', '$BLOB',
+        'KNN', '2', 'K', '2',
+        'COMBINE', 'LINEAR', '4', 'ALPHA', '0.7', 'BETA', '0.3',
+        'LIMIT', '0', '2',
+        'PARAMS', '2', 'BLOB', query_vector.tobytes()
+    )
+
+    _assert_hybrid_parity(env, sql_result, native_result)
+
+
+@skip(no_json=True)
+@skip(cluster=False)
+def test_sql_cluster_json_index_search_parity(env):
+    """FT.SQL should work against JSON indexes on the coordinator/public command path."""
+    conn = _get_sql_connection(env)
+
+    env.cmd(
+        'FT.CREATE', 'idx', 'ON', 'JSON', 'PREFIX', '1', 'doc:',
+        'SCHEMA',
+        '$.name', 'AS', 'name', 'TEXT',
+        '$.price', 'AS', 'price', 'NUMERIC', 'SORTABLE',
+        '$.category', 'AS', 'category', 'TAG'
+    )
+
+    docs = {
+        'doc:1': {'name': 'Laptop', 'price': 1000, 'category': 'electronics'},
+        'doc:2': {'name': 'Phone', 'price': 500, 'category': 'electronics'},
+        'doc:3': {'name': 'Desk', 'price': 200, 'category': 'furniture'},
+    }
+    for doc_id, payload in docs.items():
+        conn.execute_command('JSON.SET', doc_id, '$', json.dumps(payload))
     waitForIndex(env, 'idx')
 
     sql_result = env.cmd(

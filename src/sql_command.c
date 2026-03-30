@@ -13,8 +13,41 @@
 #include "redismodule.h"
 #include "rmalloc.h"
 #include "redisearch_rs/headers/sql_parser_ffi.h"
+#include <stdint.h>
 #include <string.h>
 #include <stdlib.h>
+
+static uint64_t hash_sql_schema_bytes(uint64_t hash, const void *data, size_t len) {
+  const unsigned char *bytes = data;
+  for (size_t i = 0; i < len; ++i) {
+    hash ^= bytes[i];
+    hash *= UINT64_C(1099511628211);
+  }
+  return hash;
+}
+
+static uint64_t compute_sql_schema_version(const IndexSpecCache *spec_cache) {
+  if (!spec_cache) {
+    return 0;
+  }
+
+  uint64_t hash = UINT64_C(1469598103934665603);
+  hash = hash_sql_schema_bytes(hash, &spec_cache->nfields, sizeof(spec_cache->nfields));
+
+  for (size_t i = 0; i < spec_cache->nfields; ++i) {
+    const FieldSpec *field = &spec_cache->fields[i];
+    size_t field_name_len = 0;
+    const char *field_name = HiddenString_GetUnsafe(field->fieldName, &field_name_len);
+    const unsigned char supports_tag_queries = FIELD_IS(field, INDEXFLD_T_TAG);
+    const unsigned char supports_text_queries = FIELD_IS(field, INDEXFLD_T_FULLTEXT);
+
+    hash = hash_sql_schema_bytes(hash, field_name, field_name_len);
+    hash = hash_sql_schema_bytes(hash, &supports_tag_queries, sizeof(supports_tag_queries));
+    hash = hash_sql_schema_bytes(hash, &supports_text_queries, sizeof(supports_text_queries));
+  }
+
+  return hash;
+}
 
 static SqlSchemaField *build_sql_schema_fields(const IndexSpecCache *spec_cache, size_t *out_len) {
   *out_len = 0;
@@ -155,9 +188,8 @@ int SQLCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
   StrongRef spec_ref = IndexSpec_LoadUnsafe(probe.index_name);
   IndexSpec *spec = StrongRef_Get(spec_ref);
   if (spec) {
-    schema_version = spec->revision;
-
     IndexSpecCache *spec_cache = IndexSpec_GetSpecCache(spec);
+    schema_version = compute_sql_schema_version(spec_cache);
     schema_fields = build_sql_schema_fields(spec_cache, &schema_fields_len);
     IndexSpecCache_Decref(spec_cache);
     // IndexSpec_LoadUnsafe returns RediSearch's borrowed global strong ref.

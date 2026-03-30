@@ -30,6 +30,9 @@ FT.CONFIG SET SQL_ENABLED true
 
 - Command type: read-only
 - Deployment modes: standalone and coordinator/public command path
+- Current module-level coverage: standalone parity coverage for the documented
+  SQL surface, plus coordinator/public-path search and aggregate parity
+  coverage and coordinator vector, Hybrid, and JSON behavioral coverage
 
 If `SQL_ENABLED` is `false`, `FT.SQL` returns an error instead of executing the
 query.
@@ -47,6 +50,9 @@ default until all of the following are signed off:
   to support
 - the benchmark pairs and microbenchmarks are run on release hardware and
   reviewed
+- the release evidence template in
+  [tests/benchmarks/SQL_BENCHMARKS.md](/Users/plambert/Documents/Work/Codex-Workplace/RediSearch/tests/benchmarks/SQL_BENCHMARKS.md)
+  is filled with release-hardware results for the target build
 - rollback guidance is documented, with `SQL_ENABLED=false` as the immediate
   disable path
 - a release owner explicitly approves the default-on change
@@ -56,6 +62,10 @@ default until all of the following are signed off:
 - SQL is parsed and validated in the Rust SQL semantic layer.
 - Schema-aware validation is used to distinguish supported equality on `TAG`
   fields from rejected equality on `TEXT` fields.
+- Index names follow normal RediSearch conventions from the `FROM` clause.
+  Practical names already used across the RediSearch test suite, such as
+  `idx:all`, are accepted; the SQL validator rejects only empty names and names
+  containing whitespace or control characters.
 - The translated command is executed through the public RediSearch command path.
 - Search and aggregate dispatch use dialect 2 internally when needed.
 - Hybrid dispatch uses the live `FT.HYBRID SEARCH ... VSIM ... COMBINE LINEAR ... PARAMS`
@@ -80,6 +90,9 @@ The response shape follows the translated backend command:
 | pgvector-style KNN (`<->`, `<=>`, `<#>`) | `FT.SEARCH` | `LIMIT` determines `K`; default `K=10` |
 | Weighted Hybrid via `OPTION (vector_weight, text_weight)` | `FT.HYBRID` | Only the live `COMBINE LINEAR` path is exposed in SQL v1 |
 
+This supported surface is the same subset documented in the verified guide at
+[docs/SQL_TEST_GUIDE.md](/Users/plambert/Documents/Work/Codex-Workplace/RediSearch/docs/SQL_TEST_GUIDE.md).
+
 ## Unsupported Surface
 
 These forms are intentionally unsupported in SQL v1:
@@ -97,6 +110,9 @@ These forms are intentionally unsupported in SQL v1:
 - `OPTION (...)` is only valid when the query includes vector ordering
   (`ORDER BY field <-> '[...]'`, `<=>`, or `<#>`).
 - If only one Hybrid weight is provided, the other defaults to `0.5`.
+- `LIKE` / `NOT LIKE` translate to RediSearch wildcard syntax. Leading-wildcard
+  patterns depend on the underlying field options, for example
+  `WITHSUFFIXTRIE`.
 - `FT.SQL` does not expose raw passthrough flags for `FT.SEARCH`,
   `FT.AGGREGATE`, or `FT.HYBRID`; the entire surface is expressed through SQL.
 

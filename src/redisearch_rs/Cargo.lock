@@ -1887,6 +1887,7 @@ dependencies = [
  "search_result_ffi",
  "slots_tracker_ffi",
  "sorting_vector_ffi",
+ "sql_parser_ffi",
  "syn 2.0.117",
  "toml",
  "triemap_ffi",

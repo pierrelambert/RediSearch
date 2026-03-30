@@ -1376,6 +1376,7 @@ booleanConfigs = [
     ('search-_prioritize-intersect-union-children', '_PRIORITIZE_INTERSECT_UNION_CHILDREN', 'no', False, False),
     ('search-raw-docid-encoding', 'RAW_DOCID_ENCODING', 'no', True, False),
     ('search-enable-unstable-features', 'ENABLE_UNSTABLE_FEATURES', 'no', False, False),
+    ('search-sql-enabled', 'SQL_ENABLED', 'no', False, False),
 ]
 
 # CONFIG-only boolean parameters (no corresponding FT.CONFIG parameter / module argument)

@@ -2152,6 +2152,25 @@ int SetFtAggregateInfo(RedisModuleCommand *cmd) {
   return RedisModule_SetCommandInfo(cmd, &info);
 }
 
+// Info for FT.SQL
+int SetFtSqlInfo(RedisModuleCommand *cmd) {
+  const RedisModuleCommandInfo info = {
+    .version = REDISMODULE_COMMAND_INFO_VERSION,
+    .summary = "Translates a SQL query to `FT.SEARCH`, `FT.AGGREGATE`, or `FT.HYBRID` and executes it",
+    .complexity = "Depends on the translated backend command plus SQL parse, validation, and translation overhead",
+    .args = (RedisModuleCommandArg[]){
+      {
+        .name = "query",
+        .summary = "Specifies the SQL query string. The index name is taken from the SQL `FROM` clause.",
+        .type = REDISMODULE_ARG_TYPE_STRING,
+      },
+      {0}
+    },
+    .arity = -2,
+  };
+  return RedisModule_SetCommandInfo(cmd, &info);
+}
+
 // Info for FT.PROFILE
 int SetFtProfileInfo(RedisModuleCommand *cmd) {
   const RedisModuleCommandInfo info = {

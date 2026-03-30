@@ -44,21 +44,7 @@ pub fn validate_query_string(sql: &str) -> Result<(), SqlError> {
 
 /// Validates a parsed SQL query against supported features.
 pub fn validate_query(query: &SelectQuery) -> Result<(), SqlError> {
-    // Validate index name is not empty
-    if query.index_name.is_empty() {
-        return Err(SqlError::translation("Index name cannot be empty"));
-    }
-
-    // Validate index name doesn't contain special characters
-    if !query
-        .index_name
-        .chars()
-        .all(|c| c.is_alphanumeric() || c == '_' || c == '-')
-    {
-        return Err(SqlError::translation(
-            "Index name contains invalid characters",
-        ));
-    }
+    validate_index_name(&query.index_name)?;
 
     let selected_columns = query.fields.len() + query.aggregates.len();
     if selected_columns > MAX_SELECT_COLUMNS {
@@ -85,6 +71,20 @@ pub fn validate_query(query: &SelectQuery) -> Result<(), SqlError> {
 
     if let Some(having) = &query.having {
         validate_condition(having, 1)?;
+    }
+
+    Ok(())
+}
+
+fn validate_index_name(index_name: &str) -> Result<(), SqlError> {
+    if index_name.is_empty() {
+        return Err(SqlError::translation("Index name cannot be empty"));
+    }
+
+    if index_name.chars().any(|c| c.is_whitespace() || c.is_control()) {
+        return Err(SqlError::translation(
+            "Index name cannot contain whitespace or control characters",
+        ));
     }
 
     Ok(())
@@ -149,6 +149,13 @@ mod tests {
     }
 
     #[test]
+    fn test_validate_index_name_with_colon() {
+        let query = SelectQuery::new("idx:all");
+        let result = validate_query(&query);
+        assert!(result.is_ok());
+    }
+
+    #[test]
     fn test_validate_query_too_large() {
         // Create a query larger than MAX_QUERY_SIZE (64KB)
         let large_query = "x".repeat(MAX_QUERY_SIZE + 1);
@@ -167,12 +174,12 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_index_name_special_chars() {
-        let query = SelectQuery::new("my@index");
+    fn test_validate_index_name_with_control_character() {
+        let query = SelectQuery::new("my\nindex");
         let result = validate_query(&query);
         assert!(result.is_err());
         let err = result.unwrap_err();
-        assert!(err.message.contains("invalid characters"));
+        assert!(err.message.contains("whitespace or control"));
     }
 
     #[test]

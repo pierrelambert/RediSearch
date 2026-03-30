@@ -47,6 +47,8 @@ RUST_DENY_WARNS=0 # Deny all Rust compiler warnings
 RUST_TOOLCHAIN_MODIFIER="" # Rust toolchain to use (e.g., +nightly)
 BOOST_DIR="${BOOST_DIR:-}"
 LIBSSL_DIR="${LIBSSL_DIR:-}"
+RANDPORTS="${RANDPORTS:-}"
+REDIS_PORT="${REDIS_PORT:-}"
 
 # Rust code is built first, so exclude benchmarking crates that link C code,
 # since the static libraries they depend on haven't been built yet.
@@ -112,8 +114,14 @@ parse_arguments() {
       EXT_PORT=*)
         EXT_PORT="${arg#*=}"
         ;;
+      REDIS_PORT=*)
+        REDIS_PORT="${arg#*=}"
+        ;;
       TEST=*)
         TEST_FILTER="${arg#*=}"
+        ;;
+      RANDPORTS=*)
+        RANDPORTS="${arg#*=}"
         ;;
       RUST_PROFILE=*)
         RUST_PROFILE="${arg#*=}"
@@ -251,6 +259,53 @@ resolve_libssl_dir() {
 
   for candidate in "${candidates[@]}"; do
     if [[ -d "$candidate/include" && -d "$candidate/lib" ]]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+
+  return 1
+}
+
+resolve_macos_llvm_bin_dir() {
+  local candidate
+  local llvm_version=""
+  local -a candidates=()
+
+  if [[ -f "$ROOT/.install/LLVM_VERSION.sh" ]]; then
+    # shellcheck disable=SC1091
+    source "$ROOT/.install/LLVM_VERSION.sh"
+    llvm_version="${LLVM_VERSION:-}"
+  fi
+
+  if command -v brew &> /dev/null; then
+    if [[ -n "$llvm_version" ]]; then
+      candidate=$(brew --prefix "llvm@${llvm_version}" 2>/dev/null || true)
+      if [[ -n "$candidate" ]]; then
+        candidates+=("$candidate/bin")
+      fi
+    fi
+
+    candidate=$(brew --prefix llvm 2>/dev/null || true)
+    if [[ -n "$candidate" ]]; then
+      candidates+=("$candidate/bin")
+    fi
+  fi
+
+  if [[ -n "$llvm_version" ]]; then
+    candidates+=(
+      "/opt/homebrew/opt/llvm@${llvm_version}/bin"
+      "/usr/local/opt/llvm@${llvm_version}/bin"
+    )
+  fi
+
+  candidates+=(
+    "/opt/homebrew/opt/llvm/bin"
+    "/usr/local/opt/llvm/bin"
+  )
+
+  for candidate in "${candidates[@]}"; do
+    if [[ -x "$candidate/clang" && -x "$candidate/clang++" ]]; then
       printf '%s\n' "$candidate"
       return 0
     fi
@@ -707,7 +762,18 @@ prepare_cmake_arguments() {
   CMAKE_BASIC_ARGS="$CMAKE_BASIC_ARGS -UCMAKE_TOOLCHAIN_FILE"
 
   if [[ "$OS_NAME" == "macos" ]]; then
-    CMAKE_BASIC_ARGS="$CMAKE_BASIC_ARGS -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++"
+    local macos_cc="${CC:-clang}"
+    local macos_cxx="${CXX:-clang++}"
+
+    if [[ -z "$CC" && -z "$CXX" ]] && resolved_macos_llvm_bin_dir=$(resolve_macos_llvm_bin_dir); then
+      macos_cc="$resolved_macos_llvm_bin_dir/clang"
+      macos_cxx="$resolved_macos_llvm_bin_dir/clang++"
+      echo "Using macOS LLVM toolchain from $resolved_macos_llvm_bin_dir"
+    fi
+
+    export CC="$macos_cc"
+    export CXX="$macos_cxx"
+    CMAKE_BASIC_ARGS="$CMAKE_BASIC_ARGS -DCMAKE_C_COMPILER=$macos_cc -DCMAKE_CXX_COMPILER=$macos_cxx"
   fi
 
   if [[ "$BUILD_INTEL_SVS_OPT" == "yes" || "$BUILD_INTEL_SVS_OPT" == "1" ]]; then
@@ -1092,6 +1158,11 @@ run_python_tests() {
     return 0
   fi
 
+  local ext_mode="${EXT:-RUN}"
+  local python_test_filter="${TEST_FILTER:-}"
+  local normalized_python_test_filter="${python_test_filter//::/:}"
+  local pytest_randports="${RANDPORTS:-}"
+
   echo "Running Python behavioral tests..."
 
   # Locate the built module
@@ -1122,14 +1193,24 @@ run_python_tests() {
   export REDIS_STANDALONE="${REDIS_STANDALONE:-1}"
   export SA="${SA:-$REDIS_STANDALONE}"
   export COV
-  export EXT=${EXT-"RUN"}
+  export EXT="$ext_mode"
   export EXT_HOST=${EXT_HOST-"127.0.0.1"}
   export EXT_PORT=${EXT_PORT-6379}
+  export REDIS_PORT
+
+  if [[ -z "$pytest_randports" && -z "$REDIS_PORT" && "$ext_mode" != "1" && "$ext_mode" != "run" ]]; then
+    pytest_randports=1
+    echo "Defaulting RANDPORTS=1 for local RLTest isolation"
+  fi
+  export RANDPORTS="$pytest_randports"
 
   # Set up test filter if provided
-  if [[ -n "$TEST_FILTER" ]]; then
-    export TEST="$TEST_FILTER"
-    echo "Running Python tests matching: $TEST_FILTER"
+  if [[ -n "$python_test_filter" ]]; then
+    export TEST="$normalized_python_test_filter"
+    if [[ "$normalized_python_test_filter" != "$python_test_filter" ]]; then
+      echo "Normalized Python test selector for RLTest: $python_test_filter -> $normalized_python_test_filter"
+    fi
+    echo "Running Python tests matching: $normalized_python_test_filter"
   fi
 
   # Enable quick mode if requested (run only a subset of tests)
