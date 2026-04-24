@@ -459,8 +459,8 @@ mod tests {
 
     #[test]
     fn test_value_to_rql_string_float() {
-        let val = Value::Number(3.14);
-        assert_eq!(val.to_rql_string(), "3.14");
+        let val = Value::Number(12.34);
+        assert_eq!(val.to_rql_string(), "12.34");
     }
 
     #[test]

@@ -83,7 +83,7 @@ The response shape follows the translated backend command:
 |-------------|---------|-------|
 | `SELECT *`, projection, aliases, `LIMIT/OFFSET` | `FT.SEARCH` | Core query surface |
 | Equality on `TAG`, numeric comparisons, `BETWEEN` | `FT.SEARCH` | Schema-aware validation applies |
-| `IN` / `NOT IN`, `LIKE` / `NOT LIKE`, `IS NULL` / `IS NOT NULL`, boolean composition | `FT.SEARCH` | `IS NULL` / `IS NOT NULL` require `INDEXMISSING` on the field |
+| `IN` / `NOT IN`, `LIKE` / `NOT LIKE`, `IS NULL` / `IS NOT NULL`, simple boolean composition | `FT.SEARCH` | `IS NULL` / `IS NOT NULL` require `INDEXMISSING`; supported boolean forms are `a AND b`, `a OR b`, and `NOT <single predicate>` |
 | Single-column `ORDER BY` on non-aggregate queries | `FT.SEARCH` | Plain search sort |
 | `DISTINCT`, aggregate functions, `GROUP BY`, `HAVING` | `FT.AGGREGATE` | Aggregate aliases are resolved into `FILTER` expressions |
 | Multi-column `ORDER BY` on aggregate queries | `FT.AGGREGATE` | Plain search queries reject multi-column sort |
@@ -99,6 +99,8 @@ These forms are intentionally unsupported in SQL v1:
 
 - Dedicated SQL full-text predicates such as `MATCH`, `CONTAINS`, or `FTS(...)`
 - Equality against `TEXT` fields
+- Complex nested boolean `WHERE` expressions such as `(a AND b) OR c`,
+  `a OR (b AND c)`, or `NOT (a AND b)`
 - `JOIN`, subqueries, `UNION`, window functions
 - Geo SQL predicates
 - Hybrid-only knobs beyond `vector_weight` and `text_weight`
@@ -107,6 +109,9 @@ These forms are intentionally unsupported in SQL v1:
 ## Important Limitations
 
 - Plain search queries cannot use multiple `ORDER BY` columns.
+- `WHERE` supports only simple boolean forms: `a AND b`, `a OR b`, and
+  `NOT <single predicate>`. Complex nesting like `(a AND b) OR c`,
+  `a OR (b AND c)`, and `NOT (a AND b)` is rejected.
 - `OPTION (...)` is only valid when the query includes vector ordering
   (`ORDER BY field <-> '[...]'`, `<=>`, or `<#>`).
 - If only one Hybrid weight is provided, the other defaults to `0.5`.

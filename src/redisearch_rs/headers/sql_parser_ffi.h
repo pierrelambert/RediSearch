@@ -90,6 +90,10 @@ typedef struct SqlSchemaField {
    * Whether TEXT query semantics are supported.
    */
   bool supports_text_queries;
+  /**
+   * Whether the field indexes missing values.
+   */
+  bool supports_index_missing;
 } SqlSchemaField;
 
 /**
@@ -123,10 +127,11 @@ extern "C" {
  *
  * # Safety
  *
- * - `sql` must be a valid null-terminated C string
+ * - `sql` must point to `sql_len` readable bytes for the duration of this call.
+ * - `sql` must contain valid UTF-8 and no embedded NUL bytes.
  * - The returned `SqlTranslationResult` must be freed with `sql_translation_result_free`
  */
-struct SqlTranslationResult sql_translate(const char *sql);
+struct SqlTranslationResult sql_translate(const uint8_t *sql, size_t sql_len);
 
 /**
  * Frees a `SqlTranslationResult` returned by `sql_translate`.
@@ -147,10 +152,11 @@ void sql_translation_result_free(struct SqlTranslationResult result);
  *
  * # Safety
  *
- * - `sql` must be a valid null-terminated C string
+ * - `sql` must point to `sql_len` readable bytes for the duration of this call.
+ * - `sql` must contain valid UTF-8 and no embedded NUL bytes.
  * - The returned `SqlTranslationResult` must be freed with `sql_translation_result_free`
  */
-struct SqlTranslationResult sql_translate_cached(const char *sql);
+struct SqlTranslationResult sql_translate_cached(const uint8_t *sql, size_t sql_len);
 
 /**
  * Translates a SQL query to RQL format with schema-aware caching.
@@ -160,12 +166,14 @@ struct SqlTranslationResult sql_translate_cached(const char *sql);
  *
  * # Safety
  *
- * - `sql` must be a valid null-terminated C string.
+ * - `sql` must point to `sql_len` readable bytes for the duration of this call.
+ * - `sql` must contain valid UTF-8 and no embedded NUL bytes.
  * - If `fields_len > 0`, then `fields` must point to `fields_len` valid elements.
  * - Each `SqlSchemaField.name` must be a valid null-terminated UTF-8 string.
  * - The returned `SqlTranslationResult` must be freed with `sql_translation_result_free`.
  */
-struct SqlTranslationResult sql_translate_cached_with_schema(const char *sql,
+struct SqlTranslationResult sql_translate_cached_with_schema(const uint8_t *sql,
+                                                             size_t sql_len,
                                                              uint64_t schema_version,
                                                              const struct SqlSchemaField *fields,
                                                              size_t fields_len);

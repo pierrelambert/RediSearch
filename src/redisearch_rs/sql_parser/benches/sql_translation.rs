@@ -34,7 +34,7 @@ fn base_schema(version: u64) -> QuerySchema {
         .with_field("abstract", FieldCapabilities::text())
 }
 
-fn translation_cases() -> [(&'static str, &'static str); 4] {
+const fn translation_cases() -> [(&'static str, &'static str); 4] {
     [
         ("basic_search", BASIC_SEARCH_SQL),
         ("aggregate_group_by", AGGREGATE_SQL),

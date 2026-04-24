@@ -81,7 +81,10 @@ fn validate_index_name(index_name: &str) -> Result<(), SqlError> {
         return Err(SqlError::translation("Index name cannot be empty"));
     }
 
-    if index_name.chars().any(|c| c.is_whitespace() || c.is_control()) {
+    if index_name
+        .chars()
+        .any(|c| c.is_whitespace() || c.is_control())
+    {
         return Err(SqlError::translation(
             "Index name cannot contain whitespace or control characters",
         ));
@@ -99,12 +102,9 @@ fn validate_condition(condition: &Condition, depth: usize) -> Result<(), SqlErro
     }
 
     match condition {
-        Condition::In { values, .. } if values.len() > MAX_IN_VALUES => {
-            Err(SqlError::translation(format!(
-                "IN clause exceeds maximum of {} values",
-                MAX_IN_VALUES
-            )))
-        }
+        Condition::In { values, .. } if values.len() > MAX_IN_VALUES => Err(SqlError::translation(
+            format!("IN clause exceeds maximum of {} values", MAX_IN_VALUES),
+        )),
         Condition::And(left, right) | Condition::Or(left, right) => {
             validate_condition(left, depth + 1)?;
             validate_condition(right, depth + 1)
