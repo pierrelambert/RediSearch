@@ -86,7 +86,10 @@ fn build_query_string(query: &SelectQuery, schema: &QuerySchema) -> Result<Strin
 }
 
 /// Builds the query string for FT.HYBRID (just the text query part).
-fn build_hybrid_query_string(query: &SelectQuery, schema: &QuerySchema) -> Result<String, SqlError> {
+fn build_hybrid_query_string(
+    query: &SelectQuery,
+    schema: &QuerySchema,
+) -> Result<String, SqlError> {
     // For FT.HYBRID, we only include the text filter part
     // The vector search is handled separately in arguments
     if query.conditions.is_empty() {
@@ -117,6 +120,37 @@ fn escape_tag_value(value: &str) -> String {
     escaped
 }
 
+fn push_rql_like_literal(buffer: &mut String, ch: char) {
+    if matches!(ch, '*' | '?' | '{' | '}' | '|' | '\\') {
+        buffer.push('\\');
+    }
+    buffer.push(ch);
+}
+
+fn translate_like_pattern(pattern: &str) -> String {
+    let mut translated = String::with_capacity(pattern.len());
+    let mut chars = pattern.chars();
+
+    while let Some(ch) = chars.next() {
+        if ch == '\\' {
+            if let Some(escaped) = chars.next() {
+                push_rql_like_literal(&mut translated, escaped);
+            } else {
+                push_rql_like_literal(&mut translated, ch);
+            }
+            continue;
+        }
+
+        match ch {
+            '%' => translated.push('*'),
+            '_' => translated.push('?'),
+            _ => push_rql_like_literal(&mut translated, ch),
+        }
+    }
+
+    translated
+}
+
 fn validate_string_exact_match(field: &str, schema: &QuerySchema) -> Result<(), SqlError> {
     let Some(capabilities) = schema.field_capabilities(field) else {
         return Ok(());
@@ -127,6 +161,20 @@ fn validate_string_exact_match(field: &str, schema: &QuerySchema) -> Result<(), 
             "Exact string equality is not supported for TEXT field '{field}'. Use MATCH or index the field as TAG for exact matching",
         ))
         .with_suggestion("Use MATCH for TEXT fields or index the field as TAG for exact matching"));
+    }
+
+    Ok(())
+}
+
+fn validate_index_missing(field: &str, schema: &QuerySchema) -> Result<(), SqlError> {
+    let Some(capabilities) = schema.field_capabilities(field) else {
+        return Ok(());
+    };
+
+    if !capabilities.supports_index_missing {
+        return Err(SqlError::unsupported(format!(
+            "IS NULL requires INDEXMISSING on field '{field}'"
+        )));
     }
 
     Ok(())
@@ -223,14 +271,12 @@ fn translate_condition(condition: &Condition, schema: &QuerySchema) -> Result<St
             pattern,
             negated,
         } => {
-            // Convert SQL LIKE pattern to RQL wildcard
-            // SQL % -> RQL *
-            // SQL _ -> RQL ?
-            let rql_pattern = pattern.replace('%', "*").replace('_', "?");
+            let rql_pattern = translate_like_pattern(pattern);
             let prefix = if *negated { "-" } else { "" };
             Ok(format!("{prefix}@{field}:{rql_pattern}"))
         }
         Condition::IsNull { field, negated } => {
+            validate_index_missing(field, schema)?;
             // RediSearch uses ismissing() for null checks
             if *negated {
                 // IS NOT NULL: field exists and has a value
