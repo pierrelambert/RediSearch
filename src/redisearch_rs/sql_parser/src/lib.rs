@@ -106,14 +106,31 @@
 //! - `vector_weight`: Weight for vector similarity (0.0 to 1.0, default: 0.5)
 //! - `text_weight`: Weight for text relevance (0.0 to 1.0, default: 0.5)
 //!
+//! # Schema-aware vs Schema-unaware
+//!
+//! [`translate_with_schema`] is the primary API when field metadata is available.
+//! It validates schema-dependent constraints before producing a [`Translation`].
+//!
+//! [`translate`] is a convenience wrapper for schema-unaware callers. It uses an
+//! empty [`QuerySchema`], so it parses and translates SQL without validating
+//! field types or other schema-dependent constraints.
+//!
 //! # Example
 //!
 //! ```
-//! use sql_parser::translate;
+//! use sql_parser::{translate_with_schema, Command, FieldCapabilities, QuerySchema};
 //!
-//! let result = translate("SELECT * FROM products WHERE price > 100").unwrap();
+//! let schema = QuerySchema::new(1)
+//!     .with_field("category", FieldCapabilities::tag());
+//! let result = translate_with_schema(
+//!     "SELECT * FROM products WHERE category = 'electronics'",
+//!     &schema,
+//! )
+//! .unwrap();
+//!
+//! assert_eq!(result.command, Command::Search);
 //! assert_eq!(result.index_name, "products");
-//! assert_eq!(result.query_string, "@price:[(100 +inf]");
+//! assert_eq!(result.query_string, "@category:{electronics}");
 //! ```
 
 pub mod ast;
@@ -222,11 +239,16 @@ pub struct Translation {
     pub arguments: Vec<String>,
 }
 
-/// Translates a SQL query string to RQL format.
+/// Translates a SQL query string to RQL format without schema metadata.
 ///
-/// This is the main entry point for SQL translation. It parses the SQL
-/// query, validates it, and produces a [`Translation`] that can be used
-/// to execute the equivalent RediSearch command.
+/// This convenience wrapper calls [`translate_with_schema`] with an empty
+/// [`QuerySchema`]. It parses the SQL query, validates query structure, and
+/// produces a [`Translation`] that can be used to execute the equivalent
+/// RediSearch command.
+///
+/// Because this function is schema-unaware, it does not validate field types
+/// or other schema-dependent constraints. Prefer [`translate_with_schema`]
+/// when schema metadata is available.
 ///
 /// # Arguments
 ///
@@ -254,8 +276,9 @@ pub fn translate(sql: &str) -> Result<Translation, SqlError> {
 
 /// Translates a SQL query string to RQL format using schema metadata.
 ///
-/// This variant allows providing field capability information to enable
-/// validation of string equality operations against TEXT vs TAG fields.
+/// This is the primary API when field metadata is available. It allows
+/// providing field capability information so the translator can validate
+/// schema-dependent constraints before generating RQL.
 ///
 /// # Arguments
 ///
@@ -494,6 +517,42 @@ mod tests {
     fn test_like_contains() {
         let result = translate("SELECT * FROM idx WHERE name LIKE '%apt%'").unwrap();
         assert_eq!(result.query_string, "@name:*apt*");
+    }
+
+    #[test]
+    fn test_like_escapes_literal_star() {
+        let result = translate("SELECT * FROM idx WHERE name LIKE 'a*b'").unwrap();
+        assert_eq!(result.query_string, r"@name:a\*b");
+    }
+
+    #[test]
+    fn test_like_escapes_literal_question_mark() {
+        let result = translate("SELECT * FROM idx WHERE name LIKE 'a?b'").unwrap();
+        assert_eq!(result.query_string, r"@name:a\?b");
+    }
+
+    #[test]
+    fn test_like_escapes_literal_pipe() {
+        let result = translate("SELECT * FROM idx WHERE name LIKE 'a|b'").unwrap();
+        assert_eq!(result.query_string, r"@name:a\|b");
+    }
+
+    #[test]
+    fn test_like_escapes_literal_braces() {
+        let result = translate("SELECT * FROM idx WHERE name LIKE 'a{b}c'").unwrap();
+        assert_eq!(result.query_string, r"@name:a\{b\}c");
+    }
+
+    #[test]
+    fn test_like_escapes_mixed_literal_metacharacters_and_sql_wildcards() {
+        let result = translate("SELECT * FROM idx WHERE name LIKE '%test*%'").unwrap();
+        assert_eq!(result.query_string, r"@name:*test\**");
+    }
+
+    #[test]
+    fn test_like_honors_escape_character_for_sql_wildcards_and_backslash() {
+        let result = translate("SELECT * FROM idx WHERE name LIKE 'a\\%b\\_c\\\\d'").unwrap();
+        assert_eq!(result.query_string, r"@name:a%b_c\\d");
     }
 
     #[test]
@@ -949,6 +1008,44 @@ mod tests {
         assert_eq!(result.command, Command::Search);
         assert_eq!(result.query_string, "*=>[KNN 10 @embedding $BLOB]");
         assert!(result.arguments.contains(&"PARAMS".to_string()));
+    }
+
+    #[test]
+    fn test_vector_search_parser_recognizes_only_supported_pgvector_operators() {
+        use crate::ast::DistanceMetric;
+
+        for (sql, expected_metric) in [
+            (
+                "SELECT * FROM products ORDER BY embedding <-> '[0.1, 0.2]' LIMIT 10",
+                DistanceMetric::L2,
+            ),
+            (
+                "SELECT * FROM products ORDER BY embedding <=> '[0.1, 0.2]' LIMIT 10",
+                DistanceMetric::Cosine,
+            ),
+            (
+                "SELECT * FROM products ORDER BY embedding <#> '[0.1, 0.2]' LIMIT 10",
+                DistanceMetric::InnerProduct,
+            ),
+        ] {
+            let query = parser::parse(sql).unwrap();
+            let vector_search = query.vector_search.expect("expected vector search");
+            assert_eq!(vector_search.distance_metric, expected_metric);
+        }
+    }
+
+    #[test]
+    fn test_vector_search_parser_does_not_misclassify_other_postgres_operators() {
+        for sql in [
+            "SELECT * FROM products ORDER BY embedding @> '[0.1, 0.2]' LIMIT 10",
+            "SELECT * FROM products ORDER BY embedding <@ '[0.1, 0.2]' LIMIT 10",
+            "SELECT * FROM products ORDER BY embedding && '[0.1, 0.2]' LIMIT 10",
+        ] {
+            assert!(
+                parser::parse(sql).is_err(),
+                "expected non-pgvector operator to avoid vector classification: {sql}"
+            );
+        }
     }
 
     // FT.HYBRID tests with OPTION clause
