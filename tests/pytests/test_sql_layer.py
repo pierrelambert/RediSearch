@@ -471,6 +471,19 @@ def test_sql_is_not_null_parity(env):
     _assert_search_parity(env, sql_result, native_result)
 
 
+def test_sql_is_null_without_indexmissing_is_rejected(env):
+    """FT.SQL IS NULL should fail fast with an INDEXMISSING-specific SQL error."""
+    _enable_sql(env)
+
+    env.cmd('FT.CREATE', 'idx', 'SCHEMA', 'nickname', 'TAG')
+    waitForIndex(env, 'idx')
+
+    env.expect(
+        'FT.SQL',
+        "SELECT * FROM idx WHERE nickname IS NULL"
+    ).error().contains('IS NULL requires INDEXMISSING').contains("field 'nickname'")
+
+
 def test_sql_boolean_composition_parity(env):
     """FT.SQL AND/OR/NOT composition should match equivalent FT.SEARCH boolean syntax."""
     conn = _get_sql_connection(env)
@@ -508,6 +521,19 @@ def test_sql_boolean_composition_parity(env):
     )
 
     _assert_search_parity(env, sql_result, native_result)
+
+
+def test_sql_complex_boolean_rejection(env):
+    """FT.SQL should reject unsupported grouped boolean expressions with an explicit SQL error."""
+    _enable_sql(env)
+
+    env.cmd('FT.CREATE', 'idx', 'SCHEMA', 'a', 'NUMERIC', 'b', 'NUMERIC', 'c', 'NUMERIC')
+    waitForIndex(env, 'idx')
+
+    env.expect(
+        'FT.SQL',
+        "SELECT * FROM idx WHERE (a = 1 AND b = 2) OR c = 3"
+    ).error().contains('Complex boolean expressions').contains('(a AND b) OR c')
 
 
 # =============================================================================
@@ -850,6 +876,22 @@ def test_sql_vector_knn_query(env):
     )
 
     _assert_search_parity(env, sql_result, native_result)
+
+
+def test_sql_invalid_vector_literal_is_rejected(env):
+    """FT.SQL should surface invalid vector literals as SQL-layer errors."""
+    _enable_sql(env)
+
+    env.cmd(
+        'FT.CREATE', 'idx', 'SCHEMA',
+        'vec', 'VECTOR', 'FLAT', 6, 'TYPE', 'FLOAT32', 'DIM', 2, 'DISTANCE_METRIC', 'L2'
+    )
+    waitForIndex(env, 'idx')
+
+    env.expect(
+        'FT.SQL',
+        "SELECT * FROM idx ORDER BY vec <-> '[not_a_vector]' LIMIT 5"
+    ).error().contains('invalid vector literal').contains('[not_a_vector]')
 
 
 def test_sql_hybrid_query_default_text_weight(env):
