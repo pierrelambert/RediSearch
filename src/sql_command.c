@@ -169,9 +169,10 @@ int SQLCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
   // Get SQL query string
   size_t sql_len;
   const char *sql = RedisModule_StringPtrLen(argv[1], &sql_len);
+  const uint8_t *sql_bytes = (const uint8_t *)sql;
 
   // Parse once to discover the target index and then translate with schema-aware caching.
-  SqlTranslationResult probe = sql_translate(sql);
+  SqlTranslationResult probe = sql_translate(sql_bytes, sql_len);
   if (!probe.success) {
     char *error_msg = NULL;
     rm_asprintf(&error_msg, "SQL Error: %s", probe.error_message);
@@ -201,7 +202,8 @@ int SQLCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
 
   // Call Rust FFI to translate SQL to RQL (with caching for performance)
   SqlTranslationResult result = sql_translate_cached_with_schema(
-    sql,
+    sql_bytes,
+    sql_len,
     schema_version,
     schema_fields,
     schema_fields_len
