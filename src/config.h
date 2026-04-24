@@ -196,6 +196,8 @@ typedef struct {
   uint8_t indexingMemoryLimit;
   // Enable to execute unstable features
   bool enableUnstableFeatures;
+  // Enable the experimental FT.SQL command.
+  bool sqlEnabled;
   // Control user data obfuscation in logs
   bool hideUserDataFromLog;
   // Set how much time after OOM is detected we should wait to enable the resource manager to
@@ -392,6 +394,7 @@ char *getRedisConfigValue(RedisModuleCtx *ctx, const char* confName);
     .prioritizeIntersectUnionChildren = false,                                 \
     .indexCursorLimit = DEFAULT_INDEX_CURSOR_LIMIT,                            \
     .enableUnstableFeatures = DEFAULT_UNSTABLE_FEATURES_ENABLE,                \
+    .sqlEnabled = false,                                                       \
     .hideUserDataFromLog = false,                                              \
     .indexingMemoryLimit = DEFAULT_INDEXING_MEMORY_LIMIT,                      \
     .requestConfigParams.BM25STD_TanhFactor = DEFAULT_BM25STD_TANH_FACTOR,     \

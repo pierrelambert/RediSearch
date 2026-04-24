@@ -34,6 +34,7 @@ int SetFtConfigGetInfo(RedisModuleCommand *cmd);
 int SetFtConfigHelpInfo(RedisModuleCommand *cmd);
 int SetFtSearchInfo(RedisModuleCommand *cmd);
 int SetFtAggregateInfo(RedisModuleCommand *cmd);
+int SetFtSqlInfo(RedisModuleCommand *cmd);
 int SetFtProfileInfo(RedisModuleCommand *cmd);
 int SetFtCursorReadInfo(RedisModuleCommand *cmd);
 int SetFtCursorDelInfo(RedisModuleCommand *cmd);

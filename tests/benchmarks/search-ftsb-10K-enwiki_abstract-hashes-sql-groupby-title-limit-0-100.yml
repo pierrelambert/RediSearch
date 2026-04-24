@@ -1,0 +1,39 @@
+name: "search-ftsb-10K-enwiki_abstract-hashes-sql-groupby-title-limit-0-100"
+description: "
+             SQL semantic-layer GROUP BY benchmark paired with the native FT.AGGREGATE
+             title-grouping baseline on the same 10K enwiki abstract dataset.
+             "
+
+metadata:
+  component: "search"
+setups:
+  - oss-standalone
+  - oss-standalone-threads-6
+  - oss-cluster-02-primaries
+  - oss-cluster-04-primaries
+  - oss-cluster-08-primaries
+  - oss-cluster-16-primaries
+  - oss-cluster-20-primaries
+  - oss-cluster-24-primaries
+  - oss-cluster-32-primaries
+  - oss-cluster-04-primaries-threads-6
+
+dbconfig:
+  - init_commands:
+    - '"FT.CONFIG" "SET" "SQL_ENABLED" "true"'
+    - '"FT.CREATE" "enwiki_abstract" "ON" "HASH" "SCHEMA" "title" "text" "SORTABLE" "url" "text" "SORTABLE" "abstract" "text" "SORTABLE"'
+  - dataset_name: "ftsb-10K-enwiki_abstract-hashes"
+  - tool: ftsb_redisearch
+  - parameters:
+    - workers: 64
+    - reporting-period: 1s
+    - input: "https://s3.amazonaws.com/benchmarks.redislabs/redisearch/datasets/enwiki_abstract-hashes-wildcard/enwiki_abstract-hashes-wildcard.redisearch.commands.SETUP.csv"
+  - check:
+      keyspacelen: 10000
+
+clientconfig:
+  benchmark_type: "read-only"
+  tool: memtier_benchmark
+  arguments: >-
+    --test-time 120 -c 32 -t 1 --hide-histogram
+    --command "FT.SQL \"SELECT title, COUNT(*) AS cnt FROM enwiki_abstract GROUP BY title ORDER BY title ASC LIMIT 100\""

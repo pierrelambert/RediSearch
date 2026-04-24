@@ -45,6 +45,10 @@ RUST_PROFILE=""  # Which profile should be used to build/test Rust code
 RUN_MIRI=0       # Run Rust tests through miri to catch undefined behavior
 RUST_DENY_WARNS=0 # Deny all Rust compiler warnings
 RUST_TOOLCHAIN_MODIFIER="" # Rust toolchain to use (e.g., +nightly)
+BOOST_DIR="${BOOST_DIR:-}"
+LIBSSL_DIR="${LIBSSL_DIR:-}"
+RANDPORTS="${RANDPORTS:-}"
+REDIS_PORT="${REDIS_PORT:-}"
 
 # Rust code is built first, so exclude benchmarking crates that link C code,
 # since the static libraries they depend on haven't been built yet.
@@ -110,8 +114,14 @@ parse_arguments() {
       EXT_PORT=*)
         EXT_PORT="${arg#*=}"
         ;;
+      REDIS_PORT=*)
+        REDIS_PORT="${arg#*=}"
+        ;;
       TEST=*)
         TEST_FILTER="${arg#*=}"
+        ;;
+      RANDPORTS=*)
+        RANDPORTS="${arg#*=}"
         ;;
       RUST_PROFILE=*)
         RUST_PROFILE="${arg#*=}"
@@ -124,6 +134,12 @@ parse_arguments() {
         ;;
       RUST_DENY_WARNS=*)
         RUST_DENY_WARNS="${arg#*=}"
+        ;;
+      BOOST_DIR=*)
+        BOOST_DIR="${arg#*=}"
+        ;;
+      LIBSSL_DIR=*)
+        LIBSSL_DIR="${arg#*=}"
         ;;
       SAN=*)
         SAN="${arg#*=}"
@@ -179,6 +195,175 @@ setup_test_configuration() {
     RUN_RUST_TESTS=1
     RUN_PYTEST=1
   fi
+}
+
+resolve_boost_dir() {
+  local candidate
+  local -a candidates=()
+
+  if [[ -n "$BOOST_DIR" ]]; then
+    candidates+=("$BOOST_DIR")
+  else
+    candidates+=("$ROOT/.install/boost")
+
+    if [[ "$OS_NAME" == "macos" ]]; then
+      if command -v brew &> /dev/null; then
+        candidate=$(brew --prefix boost 2>/dev/null || true)
+        if [[ -n "$candidate" ]]; then
+          candidates+=("$candidate")
+        fi
+      fi
+
+      candidates+=("/opt/homebrew/opt/boost" "/usr/local/opt/boost")
+    fi
+
+    candidates+=("/usr/local" "/usr")
+  fi
+
+  for candidate in "${candidates[@]}"; do
+    if [[ -f "$candidate/boost/version.hpp" || -f "$candidate/include/boost/version.hpp" ]]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+
+  return 1
+}
+
+resolve_libssl_dir() {
+  local candidate
+  local -a candidates=()
+
+  if [[ -n "$LIBSSL_DIR" ]]; then
+    candidates+=("$LIBSSL_DIR")
+  elif [[ "$OS_NAME" == "macos" ]]; then
+    if command -v brew &> /dev/null; then
+      candidate=$(brew --prefix openssl@3 2>/dev/null || true)
+      if [[ -n "$candidate" ]]; then
+        candidates+=("$candidate")
+      fi
+
+      candidate=$(brew --prefix openssl 2>/dev/null || true)
+      if [[ -n "$candidate" ]]; then
+        candidates+=("$candidate")
+      fi
+    fi
+
+    candidates+=(
+      "/opt/homebrew/opt/openssl@3"
+      "/usr/local/opt/openssl@3"
+      "/opt/homebrew/opt/openssl"
+      "/usr/local/opt/openssl"
+    )
+  fi
+
+  for candidate in "${candidates[@]}"; do
+    if [[ -d "$candidate/include" && -d "$candidate/lib" ]]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+
+  return 1
+}
+
+resolve_macos_llvm_bin_dir() {
+  local candidate
+  local llvm_version=""
+  local -a candidates=()
+
+  if [[ -f "$ROOT/.install/LLVM_VERSION.sh" ]]; then
+    # shellcheck disable=SC1091
+    source "$ROOT/.install/LLVM_VERSION.sh"
+    llvm_version="${LLVM_VERSION:-}"
+  fi
+
+  if command -v brew &> /dev/null; then
+    if [[ -n "$llvm_version" ]]; then
+      candidate=$(brew --prefix "llvm@${llvm_version}" 2>/dev/null || true)
+      if [[ -n "$candidate" ]]; then
+        candidates+=("$candidate/bin")
+      fi
+    fi
+
+    candidate=$(brew --prefix llvm 2>/dev/null || true)
+    if [[ -n "$candidate" ]]; then
+      candidates+=("$candidate/bin")
+    fi
+  fi
+
+  if [[ -n "$llvm_version" ]]; then
+    candidates+=(
+      "/opt/homebrew/opt/llvm@${llvm_version}/bin"
+      "/usr/local/opt/llvm@${llvm_version}/bin"
+    )
+  fi
+
+  candidates+=(
+    "/opt/homebrew/opt/llvm/bin"
+    "/usr/local/opt/llvm/bin"
+  )
+
+  for candidate in "${candidates[@]}"; do
+    if [[ -x "$candidate/clang" && -x "$candidate/clang++" ]]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+
+  return 1
+}
+
+verify_workspace_inputs() {
+  local missing=0
+  local path
+
+  local -a required_paths=(
+    "deps/hiredis/CMakeLists.txt"
+    "deps/libuv/CMakeLists.txt"
+    "deps/VectorSimilarity/CMakeLists.txt"
+  )
+
+  if [[ "$BUILD_TESTS" == "1" ]]; then
+    required_paths+=("deps/googletest/CMakeLists.txt")
+  fi
+
+  echo "Running workspace preflight..."
+
+  for path in "${required_paths[@]}"; do
+    if [[ ! -f "$ROOT/$path" ]]; then
+      echo "Workspace preflight failed: missing $ROOT/$path"
+      missing=1
+    fi
+  done
+
+  if ! resolved_boost_dir=$(resolve_boost_dir); then
+    echo "Workspace preflight failed: no usable Boost installation was found."
+    echo "Set BOOST_DIR=/path, populate $ROOT/.install/boost, or install Boost locally."
+    echo "Without this, CMake falls back to downloading Boost, which breaks offline verification."
+    missing=1
+  else
+    BOOST_DIR="$resolved_boost_dir"
+    echo "Using BOOST_DIR=$BOOST_DIR"
+  fi
+
+  if [[ "$OS_NAME" == "macos" ]]; then
+    if resolved_libssl_dir=$(resolve_libssl_dir); then
+      LIBSSL_DIR="$resolved_libssl_dir"
+      echo "Using LIBSSL_DIR=$LIBSSL_DIR"
+    else
+      echo "Warning: LIBSSL_DIR was not resolved automatically; relying on CMake OpenSSL discovery."
+    fi
+  fi
+
+  if [[ "$missing" == "1" ]]; then
+    echo "Populate missing submodules with 'make fetch' before building or running SQL behavioral tests."
+    exit 1
+  fi
+}
+
+cargo_nextest_available() {
+  cargo nextest --version &> /dev/null
 }
 
 #-----------------------------------------------------------------------------
@@ -349,6 +534,14 @@ capture_coverage() {
 prepare_cmake_arguments() {
   # Initialize with base arguments
   CMAKE_BASIC_ARGS="-DCOORD_TYPE=$COORD"
+
+  if [[ -n "$BOOST_DIR" ]]; then
+    CMAKE_BASIC_ARGS="$CMAKE_BASIC_ARGS -DBOOST_DIR=$BOOST_DIR"
+  fi
+
+  if [[ -n "$LIBSSL_DIR" ]]; then
+    CMAKE_BASIC_ARGS="$CMAKE_BASIC_ARGS -DLIBSSL_DIR=$LIBSSL_DIR"
+  fi
 
   if [[ "$LTO" == "1" ]]; then
     # LTO is only supported on Linux
@@ -569,7 +762,18 @@ prepare_cmake_arguments() {
   CMAKE_BASIC_ARGS="$CMAKE_BASIC_ARGS -UCMAKE_TOOLCHAIN_FILE"
 
   if [[ "$OS_NAME" == "macos" ]]; then
-    CMAKE_BASIC_ARGS="$CMAKE_BASIC_ARGS -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++"
+    local macos_cc="${CC:-clang}"
+    local macos_cxx="${CXX:-clang++}"
+
+    if [[ -z "$CC" && -z "$CXX" ]] && resolved_macos_llvm_bin_dir=$(resolve_macos_llvm_bin_dir); then
+      macos_cc="$resolved_macos_llvm_bin_dir/clang"
+      macos_cxx="$resolved_macos_llvm_bin_dir/clang++"
+      echo "Using macOS LLVM toolchain from $resolved_macos_llvm_bin_dir"
+    fi
+
+    export CC="$macos_cc"
+    export CXX="$macos_cxx"
+    CMAKE_BASIC_ARGS="$CMAKE_BASIC_ARGS -DCMAKE_C_COMPILER=$macos_cc -DCMAKE_CXX_COMPILER=$macos_cxx"
   fi
 
   if [[ "$BUILD_INTEL_SVS_OPT" == "yes" || "$BUILD_INTEL_SVS_OPT" == "1" ]]; then
@@ -600,6 +804,34 @@ prepare_cmake_arguments() {
 
   # Export RUSTFLAGS so it's available to the Rust build process
   export RUSTFLAGS
+
+  if [[ -n "$LIBSSL_DIR" ]]; then
+    if [[ -n "$LDFLAGS" ]]; then
+      LDFLAGS="$LDFLAGS -L$LIBSSL_DIR/lib"
+    else
+      LDFLAGS="-L$LIBSSL_DIR/lib"
+    fi
+    export LDFLAGS
+  fi
+
+  if [[ "$OS_NAME" == "macos" && -n "$BOOST_DIR" ]]; then
+    local boost_include_dir=""
+
+    if [[ -d "$BOOST_DIR/include" ]]; then
+      boost_include_dir="$BOOST_DIR/include"
+    elif [[ -d "$BOOST_DIR" ]]; then
+      boost_include_dir="$BOOST_DIR"
+    fi
+
+    if [[ -n "$boost_include_dir" ]]; then
+      if [[ -n "$CPLUS_INCLUDE_PATH" ]]; then
+        CPLUS_INCLUDE_PATH="$boost_include_dir:$CPLUS_INCLUDE_PATH"
+      else
+        CPLUS_INCLUDE_PATH="$boost_include_dir"
+      fi
+      export CPLUS_INCLUDE_PATH
+    fi
+  fi
 
   # RUSTFLAGS will be passed as environment variable to avoid quoting issues
   # This prevents CMake argument parsing from truncating complex flag values
@@ -807,6 +1039,10 @@ run_rust_tests() {
   RUST_DIR="$ROOT/src/redisearch_rs"
 
   CARGO_BUILD_FLAGS=""
+  HAS_NEXTEST=0
+  if cargo_nextest_available; then
+    HAS_NEXTEST=1
+  fi
 
   # Add Rust test extensions
   if [[ $COV == 1 ]]; then
@@ -824,20 +1060,38 @@ run_rust_tests() {
       --output-path=$BINROOT/rust_cov.info
     "
   elif [[ "$RUN_MIRI" == "1" ]]; then
-    RUST_TEST_COMMAND="miri nextest run"
-    RUST_TEST_OPTIONS="--cargo-profile=$RUST_PROFILE"
+    if [[ "$HAS_NEXTEST" == "1" ]]; then
+      RUST_TEST_COMMAND="miri nextest run"
+      RUST_TEST_OPTIONS="--cargo-profile=$RUST_PROFILE"
+    else
+      echo "cargo-nextest is required for RUN_MIRI=1"
+      HAS_FAILURES=1
+      return 0
+    fi
   elif [[ "$SAN" == "address" ]]; then
     # We must rebuild the Rust standard library to get sanitizer coverage
     # for its functions.
     # Since --build-std is a cargo flag (not rustc), we set it separately
     CARGO_BUILD_FLAGS="${CARGO_BUILD_FLAGS:+${CARGO_BUILD_FLAGS} }-Zbuild-std"
-    RUST_TEST_COMMAND="nextest run"
-    # The doc tests are disabled under ASAN to avoid issues with linking to the sanitizer runtime
-    # in doc tests.
-    RUST_TEST_OPTIONS="--tests --cargo-profile=$RUST_PROFILE $EXCLUDE_RUST_BENCHING_CRATES_LINKING_C"
+    if [[ "$HAS_NEXTEST" == "1" ]]; then
+      RUST_TEST_COMMAND="nextest run"
+      # The doc tests are disabled under ASAN to avoid issues with linking to the sanitizer runtime
+      # in doc tests.
+      RUST_TEST_OPTIONS="--tests --cargo-profile=$RUST_PROFILE $EXCLUDE_RUST_BENCHING_CRATES_LINKING_C"
+    else
+      echo "cargo-nextest is not installed; falling back to cargo test"
+      RUST_TEST_COMMAND="test"
+      RUST_TEST_OPTIONS="--tests --profile=$RUST_PROFILE"
+    fi
   else
-    RUST_TEST_COMMAND="nextest run"
-    RUST_TEST_OPTIONS="--cargo-profile=$RUST_PROFILE"
+    if [[ "$HAS_NEXTEST" == "1" ]]; then
+      RUST_TEST_COMMAND="nextest run"
+      RUST_TEST_OPTIONS="--cargo-profile=$RUST_PROFILE"
+    else
+      echo "cargo-nextest is not installed; falling back to cargo test"
+      RUST_TEST_COMMAND="test"
+      RUST_TEST_OPTIONS="--profile=$RUST_PROFILE"
+    fi
   fi
 
   # Run cargo test with the appropriate filter
@@ -904,6 +1158,11 @@ run_python_tests() {
     return 0
   fi
 
+  local ext_mode="${EXT:-RUN}"
+  local python_test_filter="${TEST_FILTER:-}"
+  local normalized_python_test_filter="${python_test_filter//::/:}"
+  local pytest_randports="${RANDPORTS:-}"
+
   echo "Running Python behavioral tests..."
 
   # Locate the built module
@@ -934,14 +1193,24 @@ run_python_tests() {
   export REDIS_STANDALONE="${REDIS_STANDALONE:-1}"
   export SA="${SA:-$REDIS_STANDALONE}"
   export COV
-  export EXT=${EXT-"RUN"}
+  export EXT="$ext_mode"
   export EXT_HOST=${EXT_HOST-"127.0.0.1"}
   export EXT_PORT=${EXT_PORT-6379}
+  export REDIS_PORT
+
+  if [[ -z "$pytest_randports" && -z "$REDIS_PORT" && "$ext_mode" != "1" && "$ext_mode" != "run" ]]; then
+    pytest_randports=1
+    echo "Defaulting RANDPORTS=1 for local RLTest isolation"
+  fi
+  export RANDPORTS="$pytest_randports"
 
   # Set up test filter if provided
-  if [[ -n "$TEST_FILTER" ]]; then
-    export TEST="$TEST_FILTER"
-    echo "Running Python tests matching: $TEST_FILTER"
+  if [[ -n "$python_test_filter" ]]; then
+    export TEST="$normalized_python_test_filter"
+    if [[ "$normalized_python_test_filter" != "$python_test_filter" ]]; then
+      echo "Normalized Python test selector for RLTest: $python_test_filter -> $normalized_python_test_filter"
+    fi
+    echo "Running Python tests matching: $normalized_python_test_filter"
   fi
 
   # Enable quick mode if requested (run only a subset of tests)
@@ -1057,6 +1326,9 @@ setup_test_configuration
 
 # Set up the build environment
 setup_build_environment
+
+# Verify the local workspace before configuring CMake.
+verify_workspace_inputs
 
 # Prepare CMake arguments
 prepare_cmake_arguments

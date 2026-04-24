@@ -178,7 +178,14 @@ With the virtual environment activated:
 
 # Run a specific test function
 ./build.sh RUN_PYTEST TEST=<test_file_name>:<test_function_name>
+
+# Pytest-style selectors are also accepted and normalized for RLTest
+./build.sh RUN_PYTEST TEST=<test_file_name>::<test_function_name>
 ```
+
+`./build.sh RUN_PYTEST` now defaults local RLTest runs to randomized Redis
+ports to avoid collisions with existing local servers on `6379`. Override with
+`RANDPORTS=0` or pin a specific port with `REDIS_PORT=<port>` when needed.
 
 #### Skipping RedisJSON Tests
 
