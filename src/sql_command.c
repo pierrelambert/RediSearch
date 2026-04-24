@@ -40,10 +40,12 @@ static uint64_t compute_sql_schema_version(const IndexSpecCache *spec_cache) {
     const char *field_name = HiddenString_GetUnsafe(field->fieldName, &field_name_len);
     const unsigned char supports_tag_queries = FIELD_IS(field, INDEXFLD_T_TAG);
     const unsigned char supports_text_queries = FIELD_IS(field, INDEXFLD_T_FULLTEXT);
+    const unsigned char supports_index_missing = FieldSpec_IndexesMissing(field);
 
     hash = hash_sql_schema_bytes(hash, field_name, field_name_len);
     hash = hash_sql_schema_bytes(hash, &supports_tag_queries, sizeof(supports_tag_queries));
     hash = hash_sql_schema_bytes(hash, &supports_text_queries, sizeof(supports_text_queries));
+    hash = hash_sql_schema_bytes(hash, &supports_index_missing, sizeof(supports_index_missing));
   }
 
   return hash;
@@ -68,6 +70,7 @@ static SqlSchemaField *build_sql_schema_fields(const IndexSpecCache *spec_cache,
     fields[i].name = rm_strndup(field_name, field_name_len);
     fields[i].supports_tag_queries = FIELD_IS(field, INDEXFLD_T_TAG);
     fields[i].supports_text_queries = FIELD_IS(field, INDEXFLD_T_FULLTEXT);
+    fields[i].supports_index_missing = FieldSpec_IndexesMissing(field);
   }
 
   *out_len = spec_cache->nfields;
@@ -145,6 +148,17 @@ static char *vector_string_to_blob(const char *vector_str, size_t *out_size) {
  */
 static int is_vector_string(const char *str) {
   return str && str[0] == '[';
+}
+
+static void free_command_args(RedisModuleCtx *ctx, RedisModuleString **args, size_t arg_count) {
+  if (!args) {
+    return;
+  }
+
+  for (size_t i = 0; i < arg_count; ++i) {
+    RedisModule_FreeString(ctx, args[i]);
+  }
+  rm_free(args);
 }
 
 /**
@@ -240,19 +254,23 @@ int SQLCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
   args[next_arg++] = RedisModule_CreateString(ctx, result.query_string, strlen(result.query_string));
 
   // Remaining arguments
-  // Track binary blobs that need freeing
-  char *vector_blob = NULL;
   for (size_t i = 0; i < result.arguments_len; i++) {
     const char *arg = result.arguments[i];
     // If this is a vector string (starts with '['), convert to binary blob
     if (is_vector_string(arg)) {
       size_t blob_size;
-      vector_blob = vector_string_to_blob(arg, &blob_size);
+      char *vector_blob = vector_string_to_blob(arg, &blob_size);
       if (vector_blob) {
         args[next_arg + i] = RedisModule_CreateString(ctx, vector_blob, blob_size);
+        rm_free(vector_blob);
       } else {
-        // Fallback: pass as-is (will likely error at FT.SEARCH level)
-        args[next_arg + i] = RedisModule_CreateString(ctx, arg, strlen(arg));
+        char *error_msg = NULL;
+        rm_asprintf(&error_msg, "SQL Error: invalid vector literal '%s'", arg);
+        RedisModule_ReplyWithError(ctx, error_msg);
+        rm_free(error_msg);
+        free_command_args(ctx, args, next_arg + i);
+        sql_translation_result_free(result);
+        return REDISMODULE_OK;
       }
     } else {
       args[next_arg + i] = RedisModule_CreateString(ctx, arg, strlen(arg));
@@ -301,15 +319,7 @@ int SQLCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
   }
 
   // Free the created strings
-  for (int i = 0; i < arg_count; i++) {
-    RedisModule_FreeString(ctx, args[i]);
-  }
-  rm_free(args);
-
-  // Free vector blob if allocated
-  if (vector_blob) {
-    rm_free(vector_blob);
-  }
+  free_command_args(ctx, args, arg_count);
 
   // Free the translation result
   sql_translation_result_free(result);
