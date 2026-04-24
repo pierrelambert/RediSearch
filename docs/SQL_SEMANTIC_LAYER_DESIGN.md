@@ -291,7 +291,13 @@ src/redisearch_rs/
 ├── sql_parser/                    # Core SQL parsing and translation
 │   ├── src/
 │   │   ├── lib.rs                 # Public API
-│   │   ├── parser.rs              # SQL parsing wrapper
+│   │   ├── parser/                # SQL parsing modules
+│   │   │   ├── mod.rs             # SQL parsing wrapper
+│   │   │   ├── preprocessor.rs    # OPTION clause and FROM identifier preprocessing
+│   │   │   ├── select.rs          # SELECT statement parsing
+│   │   │   ├── aggregates.rs      # Aggregate expression parsing
+│   │   │   ├── expressions.rs     # WHERE / ORDER BY expression parsing
+│   │   │   └── options.rs         # Hybrid OPTION clause application
 │   │   ├── ast.rs                 # Internal AST representation
 │   │   ├── translator.rs          # SQL AST → RQL conversion
 │   │   ├── validation.rs          # Schema validation, type checking
@@ -566,7 +572,7 @@ const MAX_ORDER_BY_COLUMNS: usize = 8;
 
 ### Unit Tests (Rust)
 
-Location: `src/redisearch_rs/sql_parser/src/tests/`
+Location: `src/redisearch_rs/sql_parser/src/parser/*_tests.rs`
 
 **Coverage Areas**:
 1. Parser tests for each SQL construct
@@ -596,9 +602,9 @@ fn test_between_translation() {
 }
 ```
 
-### Integration Tests (Python)
+### Integration Tests (Rust)
 
-Location: `tests/pytests/test_sql.py`
+Location: `src/redisearch_rs/sql_parser/tests/integration.rs`
 
 **Test Categories**:
 1. Basic query comparison: `FT.SQL` vs equivalent `FT.SEARCH`
