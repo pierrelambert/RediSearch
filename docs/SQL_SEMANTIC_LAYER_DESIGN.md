@@ -34,7 +34,7 @@ before the default-on decision.
 | Surface | Target GA | Backend | Notes |
 |---------|-----------|---------|-------|
 | `SELECT *`, field projection, aliases, `LIMIT/OFFSET` | Yes | `FT.SEARCH` | Core query surface |
-| Comparisons, `BETWEEN`, `IN` / `NOT IN`, `LIKE` / `NOT LIKE`, `IS NULL` / `IS NOT NULL`, `AND` / `OR` / `NOT` | Yes | `FT.SEARCH` | Schema-aware validation still applies |
+| Comparisons, `BETWEEN`, `IN` / `NOT IN`, `LIKE` / `NOT LIKE`, `IS NULL` / `IS NOT NULL`, simple boolean forms | Yes | `FT.SEARCH` | Schema-aware validation still applies; supported boolean forms are `a AND b`, `a OR b`, and `NOT <single predicate>` |
 | Single-column `ORDER BY` on non-aggregate queries | Yes | `FT.SEARCH` | Matches current translator shape |
 | Multi-column `ORDER BY` | Aggregate-only | `FT.AGGREGATE` | Plain search queries must reject it |
 | `DISTINCT`, aggregate functions, `GROUP BY`, `HAVING` | Yes | `FT.AGGREGATE` | Includes the aggregate set already implemented in the Rust layer |
@@ -112,7 +112,7 @@ before the default-on decision.
 - Ranges and sets: `BETWEEN a AND b`, `IN (...)`, `NOT IN (...)`
 - Pattern matching: `LIKE`, `NOT LIKE`
 - Null checks: `IS NULL`, `IS NOT NULL`
-- Boolean logic: `AND`, `OR`, `NOT`
+- Boolean logic: simple `a AND b`, simple `a OR b`, and `NOT <single predicate>`
 
 **ORDER BY**
 - `ORDER BY field ASC|DESC`
@@ -159,6 +159,8 @@ before the default-on decision.
 - Subqueries
 - `UNION`
 - Window functions
+- Complex nested boolean `WHERE` expressions such as `(a AND b) OR c`,
+  `a OR (b AND c)`, or `NOT (a AND b)`
 - Dedicated full-text predicate syntax such as `MATCH`, `FTS(...)`, or `CONTAINS`
 - Geo queries
 - Multi-column `ORDER BY` for non-aggregate queries
