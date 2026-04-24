@@ -138,6 +138,8 @@ pub struct FieldCapabilities {
     pub supports_tag_queries: bool,
     /// Whether the field is indexed as TEXT.
     pub supports_text_queries: bool,
+    /// Whether the field indexes missing values for `IS NULL` / `IS NOT NULL`.
+    pub supports_index_missing: bool,
 }
 
 impl FieldCapabilities {
@@ -147,6 +149,7 @@ impl FieldCapabilities {
         Self {
             supports_tag_queries: true,
             supports_text_queries: false,
+            supports_index_missing: false,
         }
     }
 
@@ -156,6 +159,7 @@ impl FieldCapabilities {
         Self {
             supports_tag_queries: false,
             supports_text_queries: true,
+            supports_index_missing: false,
         }
     }
 }
@@ -181,11 +185,7 @@ impl QuerySchema {
 
     /// Add or update capabilities for a field.
     #[must_use]
-    pub fn with_field(
-        mut self,
-        field: impl Into<String>,
-        capabilities: FieldCapabilities,
-    ) -> Self {
+    pub fn with_field(mut self, field: impl Into<String>, capabilities: FieldCapabilities) -> Self {
         self.fields
             .insert(field.into().to_ascii_lowercase(), capabilities);
         self
@@ -446,12 +446,36 @@ mod tests {
 
     #[test]
     fn test_or_combined_with_and() {
-        let result =
-            translate("SELECT * FROM idx WHERE (a = 1 OR b = 2) AND c = 3").unwrap();
-        assert_eq!(
-            result.query_string,
-            "((@a:[1 1]) | (@b:[2 2])) @c:[3 3]"
+        let result = translate("SELECT * FROM idx WHERE (a = 1 OR b = 2) AND c = 3").unwrap();
+        assert_eq!(result.query_string, "((@a:[1 1]) | (@b:[2 2])) @c:[3 3]");
+    }
+
+    #[test]
+    fn test_boolean_rejects_complex_or_left_grouping() {
+        let err = translate("SELECT * FROM idx WHERE (a = 1 AND b = 2) OR c = 3").unwrap_err();
+        assert!(err
+            .message
+            .contains("Complex boolean expressions like `(a AND b) OR c` or `a OR (b AND c)` are not yet supported"));
+        assert!(err.message.contains("NOT <single predicate>"));
+    }
+
+    #[test]
+    fn test_boolean_rejects_not_over_multiple_predicates() {
+        let err = translate("SELECT * FROM idx WHERE NOT (a = 1 AND b = 2)").unwrap_err();
+        assert!(
+            err.message
+                .contains("Complex boolean expressions like `NOT (a AND b)` are not yet supported")
         );
+        assert!(err.message.contains("NOT <single predicate>"));
+    }
+
+    #[test]
+    fn test_boolean_rejects_complex_or_right_grouping() {
+        let err = translate("SELECT * FROM idx WHERE a = 1 OR (b = 2 AND c = 3)").unwrap_err();
+        assert!(err
+            .message
+            .contains("Complex boolean expressions like `(a AND b) OR c` or `a OR (b AND c)` are not yet supported"));
+        assert!(err.message.contains("simple `a OR b`"));
     }
 
     #[test]
@@ -611,10 +635,7 @@ mod tests {
             .position(|a| a == "FILTER")
             .expect("FILTER should be present");
         let filter_expr = &result.arguments[filter_idx + 1];
-        assert_eq!(
-            filter_expr, "@cnt>=5",
-            "HAVING should support >= operator"
-        );
+        assert_eq!(filter_expr, "@cnt>=5", "HAVING should support >= operator");
     }
 
     #[test]
@@ -1341,19 +1362,52 @@ mod tests {
     fn test_schema_rejects_text_field_exact_match() {
         let schema = QuerySchema::new(1).with_field("title", FieldCapabilities::text());
 
-        let err = translate_with_schema("SELECT * FROM idx WHERE title = 'redis'", &schema)
-            .unwrap_err();
+        let err =
+            translate_with_schema("SELECT * FROM idx WHERE title = 'redis'", &schema).unwrap_err();
 
         assert!(err.message.contains("TEXT field"));
         assert!(err.message.contains("MATCH"));
     }
 
     #[test]
+    fn test_is_null_requires_index_missing_with_schema() {
+        let schema = QuerySchema::new(2).with_field("category", FieldCapabilities::tag());
+
+        let err =
+            translate_with_schema("SELECT * FROM idx WHERE category IS NULL", &schema).unwrap_err();
+
+        assert_eq!(
+            err.message,
+            "IS NULL requires INDEXMISSING on field 'category'"
+        );
+    }
+
+    #[test]
+    fn test_is_not_null_requires_index_missing_with_schema() {
+        let schema = QuerySchema::new(3).with_field("category", FieldCapabilities::tag());
+
+        let err = translate_with_schema("SELECT * FROM idx WHERE category IS NOT NULL", &schema)
+            .unwrap_err();
+
+        assert_eq!(
+            err.message,
+            "IS NULL requires INDEXMISSING on field 'category'"
+        );
+    }
+
+    #[test]
+    fn test_is_null_schema_unaware_passthrough() {
+        let result = translate("SELECT * FROM idx WHERE category IS NULL").unwrap();
+
+        assert_eq!(result.query_string, "ismissing(@category)");
+    }
+
+    #[test]
     fn test_schema_field_lookup_is_case_insensitive() {
         let schema = QuerySchema::new(7).with_field("Status", FieldCapabilities::tag());
 
-        let result = translate_with_schema("SELECT * FROM idx WHERE status = 'active'", &schema)
-            .unwrap();
+        let result =
+            translate_with_schema("SELECT * FROM idx WHERE status = 'active'", &schema).unwrap();
 
         assert_eq!(result.query_string, "@status:{active}");
     }
