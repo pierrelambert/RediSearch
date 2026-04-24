@@ -12,15 +12,13 @@
 //! This module provides C-callable functions for translating SQL queries
 //! to RediSearch Query Language (RQL).
 
-#![allow(non_camel_case_types)]
-
 use std::ffi::{CStr, CString, c_char};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::ptr;
 
 use sql_parser::{
-    CacheConfig, CacheStats, Command, FieldCapabilities, QuerySchema, clear_cache,
-    get_cache_stats, set_cache_config, translate, translate_cached, translate_cached_with_schema,
+    CacheConfig, CacheStats, Command, FieldCapabilities, QuerySchema, clear_cache, get_cache_stats,
+    set_cache_config, translate, translate_cached, translate_cached_with_schema,
 };
 
 /// Command type for the translation result.
@@ -54,6 +52,8 @@ pub struct SqlSchemaField {
     pub supports_tag_queries: bool,
     /// Whether TEXT query semantics are supported.
     pub supports_text_queries: bool,
+    /// Whether the field indexes missing values.
+    pub supports_index_missing: bool,
 }
 
 /// Result structure for SQL to RQL translation.
@@ -127,13 +127,17 @@ fn sql_translation_from_result(
             let index_name = match CString::new(translation.index_name) {
                 Ok(index_name) => index_name,
                 Err(_) => {
-                    return sql_translation_error("translated index name contains embedded NUL byte");
+                    return sql_translation_error(
+                        "translated index name contains embedded NUL byte",
+                    );
                 }
             };
             let query_string = match CString::new(translation.query_string) {
                 Ok(query_string) => query_string,
                 Err(_) => {
-                    return sql_translation_error("translated query string contains embedded NUL byte");
+                    return sql_translation_error(
+                        "translated query string contains embedded NUL byte",
+                    );
                 }
             };
 
@@ -144,7 +148,9 @@ fn sql_translation_from_result(
                 .collect::<Result<Vec<_>, _>>()
             {
                 Ok(arguments) => arguments,
-                Err(_) => return sql_translation_error("translated argument contains embedded NUL byte"),
+                Err(_) => {
+                    return sql_translation_error("translated argument contains embedded NUL byte");
+                }
             };
 
             let arguments_len = argument_cstrings.len();
@@ -176,7 +182,16 @@ fn sql_translation_from_result(
     }
 }
 
-unsafe fn sql_input_from_ffi<'a>(sql: *const u8, sql_len: usize) -> Result<&'a str, SqlTranslationResult> {
+/// Convert raw SQL bytes from the FFI boundary into a validated UTF-8 string.
+///
+/// # Safety
+///
+/// The caller must ensure that `sql` is either null or points to `sql_len`
+/// readable bytes for the duration of this call.
+unsafe fn sql_input_from_ffi<'a>(
+    sql: *const u8,
+    sql_len: usize,
+) -> Result<&'a str, SqlTranslationResult> {
     if sql.is_null() {
         return Err(sql_translation_error("SQL query is null"));
     }
@@ -188,7 +203,9 @@ unsafe fn sql_input_from_ffi<'a>(sql: *const u8, sql_len: usize) -> Result<&'a s
     // SAFETY: Caller guarantees `sql` points to `sql_len` bytes for the duration of this call.
     let sql_bytes = unsafe { std::slice::from_raw_parts(sql, sql_len) };
     if sql_bytes.contains(&0) {
-        return Err(sql_translation_error("SQL query contains embedded NUL byte"));
+        return Err(sql_translation_error(
+            "SQL query contains embedded NUL byte",
+        ));
     }
 
     std::str::from_utf8(sql_bytes)
@@ -245,6 +262,13 @@ fn catch_unwind_or_default<T: Default>(f: impl FnOnce() -> T) -> T {
     catch_unwind(AssertUnwindSafe(f)).unwrap_or_default()
 }
 
+/// Convert an FFI schema description into an owned `QuerySchema`.
+///
+/// # Safety
+///
+/// If `fields_len > 0`, the caller must ensure `fields` points to
+/// `fields_len` readable `SqlSchemaField` values, and each `name` points to a
+/// valid null-terminated UTF-8 string.
 unsafe fn query_schema_from_ffi(
     version: u64,
     fields: *const SqlSchemaField,
@@ -275,6 +299,7 @@ unsafe fn query_schema_from_ffi(
             FieldCapabilities {
                 supports_tag_queries: field.supports_tag_queries,
                 supports_text_queries: field.supports_text_queries,
+                supports_index_missing: field.supports_index_missing,
             },
         );
     }
@@ -306,21 +331,15 @@ pub unsafe extern "C" fn sql_translation_result_free(result: SqlTranslationResul
     catch_unwind_or_default(|| {
         if !result.index_name.is_null() {
             // SAFETY: index_name was created by CString::into_raw in sql_translate.
-            unsafe {
-                drop(CString::from_raw(result.index_name));
-            }
+            drop(unsafe { CString::from_raw(result.index_name) });
         }
         if !result.query_string.is_null() {
             // SAFETY: query_string was created by CString::into_raw in sql_translate.
-            unsafe {
-                drop(CString::from_raw(result.query_string));
-            }
+            drop(unsafe { CString::from_raw(result.query_string) });
         }
         if !result.error_message.is_null() {
             // SAFETY: error_message was created by CString::into_raw in sql_translate.
-            unsafe {
-                drop(CString::from_raw(result.error_message));
-            }
+            drop(unsafe { CString::from_raw(result.error_message) });
         }
 
         if !result.arguments.is_null() && result.arguments_len > 0 {
@@ -331,9 +350,7 @@ pub unsafe extern "C" fn sql_translation_result_free(result: SqlTranslationResul
             for arg in args {
                 if !arg.is_null() {
                     // SAFETY: Each arg was created by CString::into_raw.
-                    unsafe {
-                        drop(CString::from_raw(arg));
-                    }
+                    drop(unsafe { CString::from_raw(arg) });
                 }
             }
         }
@@ -639,6 +656,7 @@ mod tests {
                 name: field_name.as_ptr(),
                 supports_tag_queries: false,
                 supports_text_queries: true,
+                supports_index_missing: false,
             }];
 
             let result =
@@ -691,7 +709,10 @@ mod tests {
         assert!(result.success);
         assert_eq!(result.command, SqlCommand::Search);
 
-        assert_eq!(c_str_to_string(result.query_string), "*=>[KNN 5 @embedding $BLOB]");
+        assert_eq!(
+            c_str_to_string(result.query_string),
+            "*=>[KNN 5 @embedding $BLOB]"
+        );
         let args = argument_strings(&result);
         assert!(args.contains(&"PARAMS".to_string()));
         assert!(args.contains(&"BLOB".to_string()));
@@ -726,7 +747,10 @@ mod tests {
         assert!(result.success);
         assert_eq!(result.command, SqlCommand::Hybrid);
 
-        assert_eq!(c_str_to_string(result.query_string), "@category:{electronics}");
+        assert_eq!(
+            c_str_to_string(result.query_string),
+            "@category:{electronics}"
+        );
         assert_eq!(
             argument_strings(&result),
             vec![
