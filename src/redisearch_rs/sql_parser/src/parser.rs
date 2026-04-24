@@ -214,8 +214,8 @@ fn find_option_keyword(sql: &str) -> Option<usize> {
                 .chars()
                 .next_back()
                 .is_some_and(char::is_whitespace);
-        let next_is_boundary = end == sql.len()
-            || sql[end..].chars().next().is_some_and(char::is_whitespace);
+        let next_is_boundary =
+            end == sql.len() || sql[end..].chars().next().is_some_and(char::is_whitespace);
 
         if prev_is_boundary && next_is_boundary {
             return Some(idx);
@@ -776,6 +776,12 @@ fn parse_where_clause(expr: &Expr) -> Result<Vec<Condition>, SqlError> {
     Ok(conditions)
 }
 
+fn unsupported_complex_boolean_expression(examples: &str) -> SqlError {
+    SqlError::unsupported(format!(
+        "Complex boolean expressions like {examples} are not yet supported; supported WHERE boolean forms are simple `a AND b`, simple `a OR b`, and `NOT <single predicate>`"
+    ))
+}
+
 fn parse_expression(expr: &Expr, conditions: &mut Vec<Condition>) -> Result<(), SqlError> {
     match expr {
         Expr::BinaryOp { left, op, right } => parse_binary_op(left, op, right, conditions),
@@ -864,9 +870,7 @@ fn parse_expression(expr: &Expr, conditions: &mut Vec<Condition>) -> Result<(), 
                 conditions.push(Condition::Not(Box::new(inner_cond)));
                 Ok(())
             } else {
-                Err(SqlError::unsupported(
-                    "NOT with multiple conditions is not supported",
-                ))
+                Err(unsupported_complex_boolean_expression("`NOT (a AND b)`"))
             }
         }
         _ => Err(SqlError::unsupported(format!(
@@ -937,10 +941,8 @@ fn parse_binary_op(
                 let right_cond = right_conditions.pop().unwrap();
                 conditions.push(Condition::Or(Box::new(left_cond), Box::new(right_cond)));
             } else {
-                // Multiple conditions on one side - we support this by combining
-                // For (a AND b) OR c, we can't easily translate to RQL, but we'll try
-                return Err(SqlError::unsupported(
-                    "Complex OR expressions with multiple conditions on one side are not supported",
+                return Err(unsupported_complex_boolean_expression(
+                    "`(a AND b) OR c` or `a OR (b AND c)`",
                 ));
             }
             Ok(())
@@ -1100,35 +1102,22 @@ fn get_vector_distance_metric(op: &BinaryOperator) -> Option<DistanceMetric> {
     match op {
         // <=> is parsed as Spaceship by sqlparser-rs (SQL:2023 standard operator)
         BinaryOperator::Spaceship => Some(DistanceMetric::Cosine),
-        BinaryOperator::ArrowAt => Some(DistanceMetric::L2), // <@ (similar pattern)
+        BinaryOperator::Custom(op_str) => match op_str.as_str() {
+            "<->" => Some(DistanceMetric::L2),
+            "<#>" => Some(DistanceMetric::InnerProduct),
+            _ => None,
+        },
         BinaryOperator::PGCustomBinaryOperator(parts) => {
             // Custom operator like OPERATOR(<->), OPERATOR(<=>), OPERATOR(<#>)
             let op_str: String = parts.iter().map(|p| p.to_string()).collect();
-            if op_str == "<->" || op_str.contains("<->") {
-                Some(DistanceMetric::L2)
-            } else if op_str == "<=>" || op_str.contains("<=>") {
-                Some(DistanceMetric::Cosine)
-            } else if op_str == "<#>" || op_str.contains("<#>") {
-                Some(DistanceMetric::InnerProduct)
-            } else {
-                None
+            match op_str.as_str() {
+                "<->" => Some(DistanceMetric::L2),
+                "<=>" => Some(DistanceMetric::Cosine),
+                "<#>" => Some(DistanceMetric::InnerProduct),
+                _ => None,
             }
         }
-        _ => {
-            // Check debug string as fallback
-            let debug_str = format!("{op:?}");
-            if debug_str.contains("<->") {
-                Some(DistanceMetric::L2)
-            } else if debug_str.contains("<=>") || debug_str.contains("Spaceship") {
-                Some(DistanceMetric::Cosine)
-            } else if debug_str.contains("<#>") {
-                Some(DistanceMetric::InnerProduct)
-            } else if debug_str.contains("Arrow") {
-                Some(DistanceMetric::L2) // Default for Arrow-like operators
-            } else {
-                None
-            }
-        }
+        _ => None,
     }
 }
 
