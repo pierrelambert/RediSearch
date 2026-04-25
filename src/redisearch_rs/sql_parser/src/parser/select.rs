@@ -86,7 +86,7 @@ pub(super) fn parse_statement(statement: Statement) -> Result<SelectQuery, SqlEr
                 group_by,
                 having,
                 vector_search,
-                hybrid_search: None, // TODO: Parse HYBRID syntax
+                hybrid_search: None, // Hybrid search is configured via OPTION clause.
             })
         }
         _ => Err(SqlError::unsupported(
