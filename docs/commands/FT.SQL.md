@@ -51,7 +51,7 @@ default until all of the following are signed off:
 - the benchmark pairs and microbenchmarks are run on release hardware and
   reviewed
 - the release evidence template in
-  [tests/benchmarks/SQL_BENCHMARKS.md](/Users/plambert/Documents/Work/Codex-Workplace/RediSearch/tests/benchmarks/SQL_BENCHMARKS.md)
+  [tests/benchmarks/SQL_BENCHMARKS.md](../../tests/benchmarks/SQL_BENCHMARKS.md)
   is filled with release-hardware results for the target build
 - rollback guidance is documented, with `SQL_ENABLED=false` as the immediate
   disable path
@@ -91,7 +91,7 @@ The response shape follows the translated backend command:
 | Weighted Hybrid via `OPTION (vector_weight, text_weight)` | `FT.HYBRID` | Only the live `COMBINE LINEAR` path is exposed in SQL v1 |
 
 This supported surface is the same subset documented in the verified guide at
-[docs/SQL_TEST_GUIDE.md](/Users/plambert/Documents/Work/Codex-Workplace/RediSearch/docs/SQL_TEST_GUIDE.md).
+[docs/SQL_TEST_GUIDE.md](../SQL_TEST_GUIDE.md).
 
 ## Unsupported Surface
 
