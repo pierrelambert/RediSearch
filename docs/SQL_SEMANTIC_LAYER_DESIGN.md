@@ -150,7 +150,7 @@ before the default-on decision.
 
 **Translation Cache**
 - Thread-safe LRU cache for SQL → RQL translations
-- Cache keys are schema-aware and include field-shape metadata
+- Cache keys combine raw SQL text with the schema version
 - Cache statistics include hits, misses, and hit rate
 
 ### Not Yet Supported
@@ -320,7 +320,7 @@ src/redisearch_rs/
 | `sqlparser` | `0.54.0` | SQL parsing and AST generation |
 
 **Why `sqlparser`?**
-- Battle-tested, used by DataFusion, Apache Arrow, etc.
+- Widely used, including by DataFusion and Apache Arrow
 - Supports multiple SQL dialects; the current parser uses `PostgreSqlDialect`
   so pgvector operators like `<->`, `<=>`, and `<#>` are parsed correctly
 - Produces well-structured AST
@@ -345,6 +345,11 @@ src/redisearch_rs/
 6. Use the public command path in both standalone and coordinator deployments;
    `FT.SQL` is registered with `noKeyArgs` because the index is embedded in the
    SQL string.
+
+> Known limitation: the runtime still does the probe translation through the
+> uncached `sql_translate(...)` path before it can call the schema-aware cached
+> path. Avoiding that extra translation on cache hits is a future optimization
+> opportunity.
 
 ### Key Interfaces
 
@@ -372,15 +377,36 @@ pub enum Command {
 **FFI Layer** (`sql_parser_ffi/src/lib.rs`):
 
 ```rust
-#[no_mangle]
-pub extern "C" fn sql_translate(
-    sql: *const c_char,
-    index_name: *const c_char,
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sql_translate(
+    sql: *const u8,
+    sql_len: usize,
 ) -> SqlTranslationResult;
 
-#[no_mangle]
-pub extern "C" fn sql_translation_result_free(result: SqlTranslationResult);
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sql_translate_cached(
+    sql: *const u8,
+    sql_len: usize,
+) -> SqlTranslationResult;
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sql_translate_cached_with_schema(
+    sql: *const u8,
+    sql_len: usize,
+    schema_version: u64,
+    fields: *const SqlSchemaField,
+    fields_len: usize,
+) -> SqlTranslationResult;
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sql_translation_result_free(result: SqlTranslationResult);
 ```
+
+All three translation entry points route through shared helpers that wrap the
+call in `catch_unwind(...)` and validate the incoming SQL bytes before
+translation. The FFI boundary rejects null pointers, embedded NUL bytes, and
+invalid UTF-8; the schema-aware entry point also validates the schema field
+array and field names.
 
 ---
 
@@ -441,27 +467,26 @@ Use: SELECT * FROM idx WHERE title = 'search terms' (for exact match)
 
 ### SQL→RQL Translation Cache
 
-**Strategy**: Hash SQL string, cache translated RQL result.
+**Strategy**: Hash the incoming SQL string together with the schema version,
+cache the translated RQL result, and evict least-recently-used entries when the
+cache reaches capacity.
 
 ```rust
 pub struct TranslationCache {
-    cache: HashMap<u64, CachedTranslation>,  // SQL hash → translation
-    max_entries: usize,
-    ttl_seconds: u64,
-}
-
-struct CachedTranslation {
-    translation: Translation,
-    created_at: Instant,
-    hit_count: u64,
+    cache: HashMap<u64, Translation>,
+    lru_queue: VecDeque<u64>,
+    config: CacheConfig,
 }
 ```
 
-**Cache Key**: FNV-1a hash of normalized SQL string (whitespace-normalized, case-normalized).
+**Cache Key**:
+- Uses Rust's `DefaultHasher`
+- Hash input is the raw SQL string exactly as received plus the schema version
+- Query text is not rewritten before hashing, so formatting-only differences do
+  **not** share cache entries
 
 **Translation Cache Defaults (internal)**:
 - Default capacity: 1000 queries
-- Default TTL: 300 seconds (5 minutes)
 - Eviction: LRU when at capacity
 
 > Note: The Rust SQL translation cache is an internal implementation detail and
